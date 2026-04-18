@@ -634,8 +634,8 @@ async def fetch_sea_level_stations_v2():
 
 async def fetch_station_sea_data(station_code: str, hours: int = 24):
     """
-    Obtiene datos de nivel del mar de una estación para la curva sinusoidal.
-    Usa IOC API v2: /v2/stations/{code}/data
+    Obtiene datos de nivel del mar usando IOC API v1 (mas confiable para datos).
+    La API v1 no requiere key y devuelve datos consistentes.
     """
     logger.info(f"🌊 Fetching tide data: station={station_code}, hours={hours}")
 
@@ -643,28 +643,32 @@ async def fetch_station_sea_data(station_code: str, hours: int = 24):
     start_dt = now - timedelta(hours=hours)
 
     try:
+        # Usar API v1 que es mas confiable para datos de nivel del mar
+        url = "http://www.ioc-sealevelmonitoring.org/service.php"
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(
-                f"{IOC_V2_BASE}/stations/{station_code}/data",
-                headers=get_ioc_headers(),
-                params={
-                    "timestart": start_dt.strftime("%Y-%m-%dT%H:%M"),
-                    "timeend": now.strftime("%Y-%m-%dT%H:%M"),
-                }
-            )
+            response = await client.get(url, params={
+                "query": "data",
+                "code": station_code,
+                "timestart": start_dt.strftime("%Y-%m-%dT%H:%M"),
+                "timeend": now.strftime("%Y-%m-%dT%H:%M"),
+                "format": "json"
+            })
             response.raise_for_status()
             raw_data = response.json()
 
         processed = []
-        for point in raw_data:
-            try:
-                processed.append({
-                    "timestamp": point.get("stime", ""),
-                    "value": float(point.get("slevel", 0)),
-                    "sensor": point.get("sensor", ""),
-                })
-            except (ValueError, TypeError):
-                continue
+        if isinstance(raw_data, list):
+            for point in raw_data:
+                try:
+                    val = point.get("slevel")
+                    if val is not None and val != "":
+                        processed.append({
+                            "timestamp": point.get("stime", ""),
+                            "value": round(float(val), 4),
+                            "sensor": point.get("sensor", ""),
+                        })
+                except (ValueError, TypeError):
+                    continue
 
         logger.info(f"🌊 Station {station_code}: {len(processed)} data points")
         return processed
