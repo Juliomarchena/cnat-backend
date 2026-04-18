@@ -703,9 +703,16 @@ async def lifespan(app: FastAPI):
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     logger.info("Supabase connected")
 
-    # Run initial fetch
-    await fetch_all()
-    await fetch_slow()
+    # Run initial fetch (wrapped in try/except so app doesn't crash)
+    try:
+        await fetch_all()
+    except Exception as e:
+        logger.error(f"⚠️ Initial fetch_all failed (non-fatal): {e}")
+
+    try:
+        await fetch_slow()
+    except Exception as e:
+        logger.error(f"⚠️ Initial fetch_slow failed (non-fatal): {e}")
 
     # Schedule recurring fetches
     scheduler.add_job(fetch_all, "interval", minutes=5, id="fetch_all")
