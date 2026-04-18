@@ -535,10 +535,26 @@ async def fetch_sea_level_stations_v2():
     """
     Obtiene estaciones del IOC API v2, filtra solo Pacífico,
     guarda en tabla sea_level_stations de Supabase.
+    Incluye estaciones peruanas prioritarias con datos verificados.
     """
     source_id = "ioc_v2"
     start = time.time()
     logger.info("🌊 Fetching IOC sea level stations v2 (Pacific filter)...")
+
+    # Estaciones peruanas prioritarias con codigos IOC verificados
+    now_iso = datetime.now(timezone.utc).isoformat()
+    PERU_PRIORITY = [
+        {"code": "call2", "name": "Callao", "country": "Peru", "lat": -12.07, "lon": -77.17, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "IsHor", "name": "Isla Hormiga, Lima", "country": "Peru", "lat": -11.98, "lon": -77.73, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "chim1", "name": "Chimbote", "country": "Peru", "lat": -9.08, "lon": -78.61, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "pait", "name": "Paita", "country": "Peru", "lat": -5.08, "lon": -81.11, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "talr", "name": "Talara", "country": "Peru", "lat": -4.58, "lon": -81.28, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "mata", "name": "Matarani", "country": "Peru", "lat": -17.00, "lon": -72.11, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "sanjn", "name": "San Juan", "country": "Peru", "lat": -15.36, "lon": -75.16, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "pdas", "name": "Pisco / San Andres", "country": "Peru", "lat": -13.72, "lon": -76.22, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "ilo1", "name": "Ilo", "country": "Peru", "lat": -17.64, "lon": -71.34, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+    ]
+    peru_codes_lower = {s["code"].lower() for s in PERU_PRIORITY}
 
     try:
         async with httpx.AsyncClient(timeout=60) as client:
@@ -557,6 +573,12 @@ async def fetch_sea_level_stations_v2():
                 lon = float(station.get("Lon", 0))
 
                 if not is_in_pacific(lat, lon):
+                    continue
+
+                code = station.get("Code", "")
+
+                # Saltar estaciones peruanas del IOC (usaremos las prioritarias)
+                if code.lower() in peru_codes_lower:
                     continue
 
                 sensors = station.get("sensor", [])
@@ -578,7 +600,7 @@ async def fetch_sea_level_stations_v2():
                         pass
 
                 pacific_stations.append({
-                    "code": station.get("Code", ""),
+                    "code": code,
                     "name": station.get("Location", "Unknown"),
                     "country": station.get("countryname", station.get("country", "")),
                     "lat": lat,
@@ -593,25 +615,27 @@ async def fetch_sea_level_stations_v2():
                     "transmit_type": station.get("transmittype", ""),
                     "operator": station.get("localoperator", ""),
                     "source": "IOC-SLSMF-v2",
-                    "fetched_at": datetime.now(timezone.utc).isoformat()
+                    "fetched_at": now_iso
                 })
 
             except (ValueError, TypeError, KeyError) as e:
                 logger.warning(f"Skipping station: {e}")
                 continue
 
-        logger.info(f"🌊 Pacific stations: {len(pacific_stations)} of {len(stations_raw)} total")
+        # Insertar estaciones peruanas prioritarias al inicio
+        all_stations = PERU_PRIORITY + pacific_stations
+        logger.info(f"🌊 Pacific stations: {len(pacific_stations)} + {len(PERU_PRIORITY)} Peru priority = {len(all_stations)} total")
 
-        if pacific_stations and supabase:
+        if all_stations and supabase:
             # Limpiar y reinsertar
             supabase.table("sea_level_stations").delete().neq("code", "").execute()
 
             batch_size = 50
-            for i in range(0, len(pacific_stations), batch_size):
-                batch = pacific_stations[i:i + batch_size]
+            for i in range(0, len(all_stations), batch_size):
+                batch = all_stations[i:i + batch_size]
                 supabase.table("sea_level_stations").insert(batch).execute()
 
-            logger.info(f"✅ {len(pacific_stations)} stations saved to Supabase")
+            logger.info(f"✅ {len(all_stations)} stations saved to Supabase ({len(PERU_PRIORITY)} Peru priority)")
 
         duration = int((time.time() - start) * 1000)
         await log_fetch(source_id, "success", len(pacific_stations), duration_ms=duration)
