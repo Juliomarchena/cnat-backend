@@ -2,6 +2,8 @@
 CNAT - Centro Nacional de Alerta de Tsunamis
 Backend de ingesta de datos en tiempo real
 MICROHELP © 2026
+
+Incluye: Mapa Mareográfico del Pacífico (IOC/SLSMF API v2)
 """
 
 import os
@@ -28,11 +30,31 @@ logger = logging.getLogger("cnat")
 
 # ─── Config ───
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")  # service_role key for writes
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+IOC_API_KEY = os.getenv("IOC_API_KEY", "")
 supabase: Client = None
 
 HTTP_TIMEOUT = 30
 scheduler = AsyncIOScheduler()
+
+# ─── IOC API v2 Config ───
+IOC_V2_BASE = "https://api.ioc-sealevelmonitoring.org/v2"
+
+def get_ioc_headers():
+    return {"X-API-KEY": IOC_API_KEY, "Accept": "application/json"}
+
+# ─── Filtro Pacífico ───
+PACIFIC_ZONES = [
+    {"lon_min": -180, "lon_max": -70, "lat_min": -60, "lat_max": 65},
+    {"lon_min": 100,  "lon_max": 180, "lat_min": -60, "lat_max": 65},
+]
+
+def is_in_pacific(lat: float, lon: float) -> bool:
+    for zone in PACIFIC_ZONES:
+        if (zone["lon_min"] <= lon <= zone["lon_max"] and
+            zone["lat_min"] <= lat <= zone["lat_max"]):
+            return True
+    return False
 
 
 # ─── Helpers ───
@@ -88,7 +110,6 @@ async def fetch_usgs():
     start = time.time()
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            # 2.5+ magnitude, last day
             r = await client.get("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson")
             r.raise_for_status()
             data = r.json()
@@ -149,7 +170,6 @@ async def fetch_ptwc():
             summary = entry.get("summary", "")
             updated = entry.get("updated", "")
 
-            # Determine severity from title
             severity = "info"
             alert_type = "INFORMACION"
             title_upper = title.upper()
@@ -220,7 +240,6 @@ async def fetch_ptwc():
 async def fetch_ndbc_dart():
     source_id = "ndbc"
     start = time.time()
-    # Key DART stations near Peru/Pacific
     dart_stations = ["32412", "32413", "32411", "43412", "43413", "32301", "32302"]
     total_records = 0
 
@@ -237,15 +256,14 @@ async def fetch_ndbc_dart():
                     if len(lines) < 3:
                         continue
 
-                    # Parse DART format: #YY MM DD hh mm ss T   HEIGHT
                     readings = []
-                    for line in lines[2:12]:  # Last 10 readings
+                    for line in lines[2:12]:
                         parts = line.split()
                         if len(parts) < 8:
                             continue
                         try:
                             yy, mm, dd, hh, mn, ss = parts[0:6]
-                            t_type = parts[6]  # 1=scheduled, 2=event
+                            t_type = parts[6]
                             height = float(parts[7])
                             year = 2000 + int(yy) if int(yy) < 100 else int(yy)
                             reading_time = datetime(year, int(mm), int(dd), int(hh), int(mn), int(ss), tzinfo=timezone.utc)
@@ -254,7 +272,7 @@ async def fetch_ndbc_dart():
                                 "station_id": station_id,
                                 "reading_time": reading_time.isoformat(),
                                 "water_level_mm": height,
-                                "anomaly_mm": 0,  # Would need baseline to compute
+                                "anomaly_mm": 0,
                                 "is_event_mode": t_type == "2",
                             })
                         except (ValueError, IndexError):
@@ -264,7 +282,6 @@ async def fetch_ndbc_dart():
                         supabase.table("buoy_readings").insert(readings).execute()
                         total_records += len(readings)
 
-                        # Update station status
                         is_event = any(r["is_event_mode"] for r in readings)
                         status = "alert" if is_event else "normal"
                         supabase.table("buoy_stations").update({"status": status}).eq("id", station_id).execute()
@@ -300,7 +317,7 @@ async def fetch_iris():
 
         lines = r.text.strip().split("\n")
         records = []
-        for line in lines[1:]:  # Skip header
+        for line in lines[1:]:
             parts = line.split("|")
             if len(parts) < 12:
                 continue
@@ -342,13 +359,12 @@ async def fetch_iris():
         logger.error(f"IRIS error: {e}")
 
 
-# ─── 5. Chile Alerta API (Sismos Chile + Tsunamis) ───
+# ─── 5. Chile Alerta API ───
 async def fetch_chile():
     source_id = "csn_chile"
     start = time.time()
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            # Últimos sismos Chile
             r = await client.get("https://chilealerta.com/api/query/?user=demo&select=ultimos_sismos_chile&limit=30")
             r.raise_for_status()
             data = r.json()
@@ -374,7 +390,6 @@ async def fetch_chile():
         if records:
             supabase.table("earthquakes").upsert(records, on_conflict="id").execute()
 
-        # Also fetch tsunami bulletins
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             r2 = await client.get("https://chilealerta.com/api/query/?user=demo&select=tsunami_chile")
             if r2.status_code == 200:
@@ -429,7 +444,6 @@ async def fetch_news_rss():
                 summary = entry.get("summary", "")
                 combined = (title + " " + summary).lower()
 
-                # Filter for relevant news
                 is_relevant = any(kw in combined for kw in keywords)
                 if not is_relevant:
                     continue
@@ -462,31 +476,27 @@ async def fetch_news_rss():
             logger.error(f"News {source_id} error: {e}")
 
 
-# ─── 7. Sea Level Monitoring UNESCO ───
+# ─── 7. Sea Level UNESCO (API v1 - legacy) ───
 async def fetch_sea_level():
     source_id = "sea_level"
     start = time.time()
     try:
-        # Get Pacific stations
         url = "https://www.ioc-sealevelmonitoring.org/service.php?query=stationlist&showall=all&output=json"
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             r = await client.get(url)
             r.raise_for_status()
             stations = r.json()
 
-        # Filter for Pacific/South American stations
         pacific_stations = []
         for s in stations:
             try:
                 lon = float(s.get("lon", 0))
                 lat = float(s.get("lat", 0))
-                # Pacific coast of South America
                 if -120 <= lon <= -60 and -60 <= lat <= 20:
                     pacific_stations.append(s)
             except (ValueError, TypeError):
                 continue
 
-        # Limit to first 20 stations
         for station in pacific_stations[:20]:
             station_id = make_id("sl", station.get("code", ""))
             try:
@@ -516,6 +526,155 @@ async def fetch_sea_level():
 
 
 # ═══════════════════════════════════════════
+#  8. MAPA MAREOGRÁFICO - IOC API v2
+#     Estaciones del Pacífico con datos de
+#     nivel del mar para la curva sinusoidal
+# ═══════════════════════════════════════════
+
+async def fetch_sea_level_stations_v2():
+    """
+    Obtiene estaciones del IOC API v2, filtra solo Pacífico,
+    guarda en tabla sea_level_stations de Supabase.
+    """
+    source_id = "ioc_v2"
+    start = time.time()
+    logger.info("🌊 Fetching IOC sea level stations v2 (Pacific filter)...")
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.get(
+                f"{IOC_V2_BASE}/stations",
+                headers=get_ioc_headers()
+            )
+            response.raise_for_status()
+            stations_raw = response.json()
+
+        pacific_stations = []
+
+        for station in stations_raw:
+            try:
+                lat = float(station.get("Lat", 0))
+                lon = float(station.get("Lon", 0))
+
+                if not is_in_pacific(lat, lon):
+                    continue
+
+                sensors = station.get("sensor", [])
+                primary_sensor = sensors[0] if sensors else {}
+
+                api_status = station.get("status", "Unknown")
+                is_online = api_status == "Operational"
+
+                last_time_str = primary_sensor.get("lasttime", "")
+                if last_time_str and is_online:
+                    try:
+                        last_time = datetime.strptime(
+                            last_time_str, "%Y-%m-%d %H:%M:%S"
+                        ).replace(tzinfo=timezone.utc)
+                        cutoff = datetime.now(timezone.utc) - timedelta(hours=6)
+                        if last_time < cutoff:
+                            is_online = False
+                    except (ValueError, TypeError):
+                        pass
+
+                pacific_stations.append({
+                    "code": station.get("Code", ""),
+                    "name": station.get("Location", "Unknown"),
+                    "country": station.get("countryname", station.get("country", "")),
+                    "lat": lat,
+                    "lon": lon,
+                    "status": "online" if is_online else "offline",
+                    "api_status": api_status,
+                    "last_value": primary_sensor.get("lastvalue"),
+                    "last_time": last_time_str,
+                    "sensor_type": primary_sensor.get("sensor", ""),
+                    "sensor_units": primary_sensor.get("units", ""),
+                    "performance": primary_sensor.get("performance", ""),
+                    "transmit_type": station.get("transmittype", ""),
+                    "operator": station.get("localoperator", ""),
+                    "source": "IOC-SLSMF-v2",
+                    "fetched_at": datetime.now(timezone.utc).isoformat()
+                })
+
+            except (ValueError, TypeError, KeyError) as e:
+                logger.warning(f"Skipping station: {e}")
+                continue
+
+        logger.info(f"🌊 Pacific stations: {len(pacific_stations)} of {len(stations_raw)} total")
+
+        if pacific_stations and supabase:
+            # Limpiar y reinsertar
+            supabase.table("sea_level_stations").delete().neq("code", "").execute()
+
+            batch_size = 50
+            for i in range(0, len(pacific_stations), batch_size):
+                batch = pacific_stations[i:i + batch_size]
+                supabase.table("sea_level_stations").insert(batch).execute()
+
+            logger.info(f"✅ {len(pacific_stations)} stations saved to Supabase")
+
+        duration = int((time.time() - start) * 1000)
+        await log_fetch(source_id, "success", len(pacific_stations), duration_ms=duration)
+        return pacific_stations
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            logger.error("❌ IOC API: 401 Unauthorized - Verificar IOC_API_KEY en .env")
+        else:
+            logger.error(f"❌ IOC API HTTP error: {e}")
+        duration = int((time.time() - start) * 1000)
+        await log_fetch(source_id, "error", error=str(e), duration_ms=duration)
+        return []
+    except Exception as e:
+        logger.error(f"❌ Error fetching sea level stations v2: {e}")
+        duration = int((time.time() - start) * 1000)
+        await log_fetch(source_id, "error", error=str(e), duration_ms=duration)
+        return []
+
+
+async def fetch_station_sea_data(station_code: str, hours: int = 24):
+    """
+    Obtiene datos de nivel del mar de una estación para la curva sinusoidal.
+    Usa IOC API v2: /v2/stations/{code}/data
+    """
+    logger.info(f"🌊 Fetching tide data: station={station_code}, hours={hours}")
+
+    now = datetime.now(timezone.utc)
+    start_dt = now - timedelta(hours=hours)
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(
+                f"{IOC_V2_BASE}/stations/{station_code}/data",
+                headers=get_ioc_headers(),
+                params={
+                    "timestart": start_dt.strftime("%Y-%m-%dT%H:%M"),
+                    "timeend": now.strftime("%Y-%m-%dT%H:%M"),
+                }
+            )
+            response.raise_for_status()
+            raw_data = response.json()
+
+        processed = []
+        for point in raw_data:
+            try:
+                processed.append({
+                    "timestamp": point.get("stime", ""),
+                    "value": float(point.get("slevel", 0)),
+                    "sensor": point.get("sensor", ""),
+                })
+            except (ValueError, TypeError):
+                continue
+
+        logger.info(f"🌊 Station {station_code}: {len(processed)} data points")
+        return processed
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching tide data for {station_code}: {e}")
+        return []
+
+
+# ═══════════════════════════════════════════
 #  MAIN FETCH ORCHESTRATOR
 # ═══════════════════════════════════════════
 async def fetch_all():
@@ -532,6 +691,7 @@ async def fetch_all():
 async def fetch_slow():
     """Less frequent fetches (every 30 min)"""
     await fetch_sea_level()
+    await fetch_sea_level_stations_v2()
 
 
 # ═══════════════════════════════════════════
@@ -551,7 +711,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(fetch_all, "interval", minutes=5, id="fetch_all")
     scheduler.add_job(fetch_slow, "interval", minutes=30, id="fetch_slow")
     scheduler.start()
-    logger.info("Scheduler started: fetch every 5 min")
+    logger.info("Scheduler started: fetch every 5 min, sea level every 30 min")
 
     yield
 
@@ -562,7 +722,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="CNAT - Sistema de Alerta Temprana de Tsunamis",
     description="Backend de ingesta de datos para el Centro Nacional de Alerta de Tsunamis - DHN Marina de Guerra del Perú",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -575,13 +735,17 @@ app.add_middleware(
 )
 
 
+# ═══════════════════════════════════════════
+#  ENDPOINTS EXISTENTES
+# ═══════════════════════════════════════════
+
 @app.get("/")
 async def root():
     return {
         "system": "CNAT - Centro Nacional de Alerta de Tsunamis",
         "provider": "MICROHELP",
         "status": "operational",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "endpoints": {
             "health": "/health",
             "fetch_now": "/fetch",
@@ -589,6 +753,8 @@ async def root():
             "earthquakes": "/api/earthquakes",
             "alerts": "/api/alerts",
             "buoys": "/api/buoys",
+            "sealevel_stations": "/api/sealevel/stations",
+            "sealevel_data": "/api/sealevel/station/{code}",
         }
     }
 
@@ -604,7 +770,6 @@ async def health():
 
 @app.post("/fetch")
 async def trigger_fetch():
-    """Manually trigger a fetch cycle"""
     await fetch_all()
     return {"status": "fetch completed", "timestamp": datetime.now(timezone.utc).isoformat()}
 
@@ -679,6 +844,66 @@ async def get_fetch_log(limit: int = 50):
     return result.data
 
 
+# ═══════════════════════════════════════════
+#  ENDPOINTS NUEVOS: MAPA MAREOGRÁFICO
+# ═══════════════════════════════════════════
+
+@app.get("/api/sealevel/stations")
+async def get_sealevel_stations():
+    """Lista de estaciones mareográficas del Pacífico (IOC v2)"""
+    try:
+        result = supabase.table("sea_level_stations").select("*").execute()
+        return {
+            "stations": result.data,
+            "count": len(result.data),
+            "source": "IOC-SLSMF-v2"
+        }
+    except Exception as e:
+        # Si la tabla no existe aún, devolver vacío
+        logger.warning(f"sea_level_stations query error: {e}")
+        return {"stations": [], "count": 0, "source": "IOC-SLSMF-v2"}
+
+
+@app.get("/api/sealevel/station/{code}")
+async def get_station_data(code: str, hours: int = 24):
+    """Datos de nivel del mar para la curva sinusoidal"""
+    data = await fetch_station_sea_data(code, hours)
+
+    if data:
+        values = [p["value"] for p in data]
+        stats = {
+            "min": round(min(values), 3),
+            "max": round(max(values), 3),
+            "mean": round(sum(values) / len(values), 3),
+            "range": round(max(values) - min(values), 3),
+            "points": len(data),
+        }
+    else:
+        stats = {}
+
+    return {"code": code, "data": data, "stats": stats}
+
+
+@app.get("/api/sealevel/station/{code}/metadata")
+async def get_station_metadata(code: str):
+    """Metadata completa de una estación IOC"""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get(
+                f"{IOC_V2_BASE}/stations/{code}",
+                headers=get_ioc_headers()
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        if isinstance(data, list) and len(data) > 0:
+            return {"code": code, "metadata": data[0]}
+        return {"code": code, "metadata": data}
+    except Exception as e:
+        logger.error(f"Metadata error for {code}: {e}")
+        return {"code": code, "error": str(e)}
+
+
 @app.get("/api/dashboard")
 async def get_dashboard():
     """Consolidated endpoint for the frontend dashboard"""
@@ -706,6 +931,15 @@ async def get_dashboard():
             .limit(10)
             .execute()).data
 
+    # Sea level stations count
+    try:
+        sl_stations = supabase.table("sea_level_stations").select("code,status", count="exact").execute()
+        sl_count = sl_stations.count or 0
+        sl_online = sum(1 for s in (sl_stations.data or []) if s.get("status") == "online")
+    except Exception:
+        sl_count = 0
+        sl_online = 0
+
     # KPIs
     critical_count = sum(1 for e in earthquakes if e.get("severity") == "critical")
     warning_count = sum(1 for e in earthquakes if e.get("severity") == "warning")
@@ -722,6 +956,8 @@ async def get_dashboard():
             "total_buoys": len(buoys),
             "sources_online": sources_online,
             "total_sources": len(sources),
+            "sealevel_stations": sl_count,
+            "sealevel_online": sl_online,
             "risk_level": "ALTO" if critical_count > 0 else "MEDIO" if warning_count > 0 else "BAJO",
         },
         "earthquakes": earthquakes,
