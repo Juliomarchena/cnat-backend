@@ -30,7 +30,7 @@ logger = logging.getLogger("cnat")
 
 # ─── Config ───
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 IOC_API_KEY = os.getenv("IOC_API_KEY", "")
 supabase: Client = None
 
