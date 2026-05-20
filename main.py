@@ -4,6 +4,13 @@ Backend de ingesta de datos en tiempo real
 MICROHELP © 2026
 
 Incluye: Mapa Mareográfico del Pacífico (IOC/SLSMF API v2)
+
+============================================================
+FASE 1 (19/05/2026): Clasificación oficial DHN
+- Se agrega dhn_classifier (módulo nuevo)
+- Cada sismo se clasifica también según la matriz oficial DHN
+- Campo severity legacy se mantiene para compatibilidad
+============================================================
 """
 
 import os
@@ -17,11 +24,15 @@ from contextlib import asynccontextmanager
 import httpx
 import feedparser
 from bs4 import BeautifulSoup
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from auth import get_current_user, require_admin, load_jwks
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from supabase import create_client, Client
 from dotenv import load_dotenv
+
+# ─── [FASE 1] Import del clasificador oficial DHN ───
+from dhn_classifier import classify_dhn, dhn_to_severity
 
 load_dotenv()
 
@@ -64,6 +75,11 @@ def make_id(*parts):
 
 
 def classify_severity(mag, depth):
+    """
+    Funcion legacy de clasificacion por severity.
+    [FASE 1]: Se mantiene para compatibilidad con frontend existente.
+    La clasificacion oficial DHN se hace ahora en classify_dhn() del modulo dhn_classifier.
+    """
     if mag >= 7.5 and depth <= 60:
         return "critical"
     if mag >= 7.0 and depth <= 100:
@@ -75,6 +91,52 @@ def classify_severity(mag, depth):
     if mag >= 4.5:
         return "moderate"
     return "normal"
+
+
+# ─── [FASE 1] Helper para construir record con clasificacion DHN ───
+def build_earthquake_record(eq_id, source_id, magnitude, depth_km, latitude, longitude,
+                            place, event_time, tsunami_flag=0, alert_level=None,
+                            raw_data=None):
+    """
+    Construye un diccionario de sismo con AMBAS clasificaciones:
+    - severity: legacy (compatibilidad con frontend actual)
+    - dhn_level, dhn_reason, is_local: clasificacion oficial DHN
+
+    Esto permite que el frontend siga funcionando sin cambios mientras
+    se actualizan los componentes que consuman los nuevos campos.
+    """
+    mag = float(magnitude)
+    depth = float(depth_km)
+    lat = float(latitude)
+    lon = float(longitude)
+
+    # Clasificacion oficial DHN
+    dhn_result = classify_dhn(mag, depth, lat, lon)
+
+    record = {
+        "id": eq_id,
+        "source_id": source_id,
+        "magnitude": round(mag, 1),
+        "depth_km": round(depth, 1),
+        "latitude": round(lat, 6),
+        "longitude": round(lon, 6),
+        "place": place or "",
+        "event_time": event_time,
+        "severity": classify_severity(mag, depth),  # legacy
+        # [FASE 1] Campos DHN nuevos
+        "dhn_level": dhn_result["dhn_level"],
+        "dhn_reason": dhn_result["dhn_reason"],
+        "is_local": dhn_result["is_local"],
+    }
+
+    if tsunami_flag is not None:
+        record["tsunami_flag"] = tsunami_flag
+    if alert_level is not None:
+        record["alert_level"] = alert_level
+    if raw_data is not None:
+        record["raw_data"] = raw_data
+
+    return record
 
 
 async def log_fetch(source_id, status, records=0, error=None, duration_ms=0):
@@ -122,20 +184,21 @@ async def fetch_usgs():
             mag = props.get("mag") or 0
             depth = coords[2] if len(coords) > 2 else 0
 
-            records.append({
-                "id": eq_id,
-                "source_id": source_id,
-                "magnitude": round(float(mag), 1),
-                "depth_km": round(float(depth), 1),
-                "latitude": round(float(coords[1]), 6),
-                "longitude": round(float(coords[0]), 6),
-                "place": props.get("place", ""),
-                "event_time": datetime.fromtimestamp(props["time"] / 1000, tz=timezone.utc).isoformat(),
-                "tsunami_flag": props.get("tsunami", 0),
-                "alert_level": props.get("alert"),
-                "severity": classify_severity(float(mag), float(depth)),
-                "raw_data": json.dumps(props),
-            })
+            # [FASE 1] Uso del helper que incluye clasificacion DHN
+            record = build_earthquake_record(
+                eq_id=eq_id,
+                source_id=source_id,
+                magnitude=mag,
+                depth_km=depth,
+                latitude=coords[1],
+                longitude=coords[0],
+                place=props.get("place", ""),
+                event_time=datetime.fromtimestamp(props["time"] / 1000, tz=timezone.utc).isoformat(),
+                tsunami_flag=props.get("tsunami", 0),
+                alert_level=props.get("alert"),
+                raw_data=json.dumps(props),
+            )
+            records.append(record)
 
         if records:
             supabase.table("earthquakes").upsert(records, on_conflict="id").execute()
@@ -330,17 +393,18 @@ async def fetch_iris():
                 mag = float(parts[10].strip())
                 place = parts[12].strip() if len(parts) > 12 else ""
 
-                records.append({
-                    "id": eq_id,
-                    "source_id": source_id,
-                    "magnitude": round(mag, 1),
-                    "depth_km": round(depth, 1),
-                    "latitude": round(lat, 6),
-                    "longitude": round(lon, 6),
-                    "place": place,
-                    "event_time": event_time,
-                    "severity": classify_severity(mag, depth),
-                })
+                # [FASE 1] Uso del helper que incluye clasificacion DHN
+                record = build_earthquake_record(
+                    eq_id=eq_id,
+                    source_id=source_id,
+                    magnitude=mag,
+                    depth_km=depth,
+                    latitude=lat,
+                    longitude=lon,
+                    place=place,
+                    event_time=event_time,
+                )
+                records.append(record)
             except (ValueError, IndexError):
                 continue
 
@@ -375,17 +439,19 @@ async def fetch_chile():
             eq_id = make_id("chile", s.get("id", s.get("utc_time")))
             mag = float(s.get("magnitude", 0))
             depth = float(s.get("depth", 0))
-            records.append({
-                "id": eq_id,
-                "source_id": source_id,
-                "magnitude": round(mag, 1),
-                "depth_km": round(depth, 1),
-                "latitude": round(float(s.get("latitude", 0)), 6),
-                "longitude": round(float(s.get("longitude", 0)), 6),
-                "place": s.get("reference", ""),
-                "event_time": s.get("utc_time", "").replace("/", "-"),
-                "severity": classify_severity(mag, depth),
-            })
+
+            # [FASE 1] Uso del helper que incluye clasificacion DHN
+            record = build_earthquake_record(
+                eq_id=eq_id,
+                source_id=source_id,
+                magnitude=mag,
+                depth_km=depth,
+                latitude=s.get("latitude", 0),
+                longitude=s.get("longitude", 0),
+                place=s.get("reference", ""),
+                event_time=s.get("utc_time", "").replace("/", "-"),
+            )
+            records.append(record)
 
         if records:
             supabase.table("earthquakes").upsert(records, on_conflict="id").execute()
@@ -527,21 +593,17 @@ async def fetch_sea_level():
 
 # ═══════════════════════════════════════════
 #  8. MAPA MAREOGRÁFICO - IOC API v2
-#     Estaciones del Pacífico con datos de
-#     nivel del mar para la curva sinusoidal
 # ═══════════════════════════════════════════
 
 async def fetch_sea_level_stations_v2():
     """
     Obtiene estaciones del IOC API v2, filtra solo Pacífico,
     guarda en tabla sea_level_stations de Supabase.
-    Incluye estaciones peruanas prioritarias con datos verificados.
     """
     source_id = "ioc_v2"
     start = time.time()
     logger.info("🌊 Fetching IOC sea level stations v2 (Pacific filter)...")
 
-    # Estaciones peruanas prioritarias con codigos IOC verificados
     now_iso = datetime.now(timezone.utc).isoformat()
     PERU_PRIORITY = [
         {"code": "call2", "name": "Callao", "country": "Peru", "lat": -12.07, "lon": -77.17, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
@@ -577,7 +639,6 @@ async def fetch_sea_level_stations_v2():
 
                 code = station.get("Code", "")
 
-                # Saltar estaciones peruanas del IOC (usaremos las prioritarias)
                 if code.lower() in peru_codes_lower:
                     continue
 
@@ -622,12 +683,10 @@ async def fetch_sea_level_stations_v2():
                 logger.warning(f"Skipping station: {e}")
                 continue
 
-        # Insertar estaciones peruanas prioritarias al inicio
         all_stations = PERU_PRIORITY + pacific_stations
         logger.info(f"🌊 Pacific stations: {len(pacific_stations)} + {len(PERU_PRIORITY)} Peru priority = {len(all_stations)} total")
 
         if all_stations and supabase:
-            # Limpiar y reinsertar
             supabase.table("sea_level_stations").delete().neq("code", "").execute()
 
             batch_size = 50
@@ -657,17 +716,13 @@ async def fetch_sea_level_stations_v2():
 
 
 async def fetch_station_sea_data(station_code: str, hours: int = 24):
-    """
-    Obtiene datos de nivel del mar usando IOC API v1 (mas confiable para datos).
-    La API v1 no requiere key y devuelve datos consistentes.
-    """
+    """Obtiene datos de nivel del mar usando IOC API v1."""
     logger.info(f"🌊 Fetching tide data: station={station_code}, hours={hours}")
 
     now = datetime.now(timezone.utc)
     start_dt = now - timedelta(hours=hours)
 
     try:
-        # Usar API v1 que es mas confiable para datos de nivel del mar
         url = "http://www.ioc-sealevelmonitoring.org/service.php"
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get(url, params={
@@ -731,7 +786,8 @@ async def lifespan(app: FastAPI):
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     logger.info("Supabase connected")
 
-    # Run initial fetch (wrapped in try/except so app doesn't crash)
+    await load_jwks()
+
     try:
         await fetch_all()
     except Exception as e:
@@ -742,7 +798,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"⚠️ Initial fetch_slow failed (non-fatal): {e}")
 
-    # Schedule recurring fetches
     scheduler.add_job(fetch_all, "interval", minutes=5, id="fetch_all")
     scheduler.add_job(fetch_slow, "interval", minutes=30, id="fetch_slow")
     scheduler.start()
@@ -757,13 +812,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="CNAT - Sistema de Alerta Temprana de Tsunamis",
     description="Backend de ingesta de datos para el Centro Nacional de Alerta de Tsunamis - DHN Marina de Guerra del Perú",
-    version="2.0.0",
+    version="2.1.0",  # [FASE 1] Subida de version
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://cnat-frontend.vercel.app",
+        "https://cnat-frontend-git-main-juliomarchenas-projects.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -771,7 +830,7 @@ app.add_middleware(
 
 
 # ═══════════════════════════════════════════
-#  ENDPOINTS EXISTENTES
+#  ENDPOINTS
 # ═══════════════════════════════════════════
 
 @app.get("/")
@@ -780,7 +839,8 @@ async def root():
         "system": "CNAT - Centro Nacional de Alerta de Tsunamis",
         "provider": "MICROHELP",
         "status": "operational",
-        "version": "2.0.0",
+        "version": "2.1.0",  # [FASE 1]
+        "phase": "FASE 1 - Clasificacion DHN integrada",
         "endpoints": {
             "health": "/health",
             "fetch_now": "/fetch",
@@ -790,6 +850,8 @@ async def root():
             "buoys": "/api/buoys",
             "sealevel_stations": "/api/sealevel/stations",
             "sealevel_data": "/api/sealevel/station/{code}",
+            "earthquakes_local": "/api/earthquakes/local",  # [FASE 1] nuevo
+            "earthquakes_by_dhn": "/api/earthquakes/by-dhn-level/{level}",  # [FASE 1] nuevo
         }
     }
 
@@ -804,19 +866,19 @@ async def health():
 
 
 @app.post("/fetch")
-async def trigger_fetch():
+async def trigger_fetch(user: dict = Depends(get_current_user)):
     await fetch_all()
     return {"status": "fetch completed", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/sources")
-async def get_sources():
+async def get_sources(user: dict = Depends(get_current_user)):
     result = supabase.table("sources").select("*").order("source_type").execute()
     return result.data
 
 
 @app.get("/api/earthquakes")
-async def get_earthquakes(limit: int = 50, min_mag: float = 0):
+async def get_earthquakes(limit: int = 50, min_mag: float = 0, user: dict = Depends(get_current_user)):
     result = (supabase.table("earthquakes")
               .select("*")
               .gte("magnitude", min_mag)
@@ -826,8 +888,45 @@ async def get_earthquakes(limit: int = 50, min_mag: float = 0):
     return result.data
 
 
+# ─── [FASE 1] NUEVOS ENDPOINTS DE CLASIFICACION DHN ───
+
+@app.get("/api/earthquakes/local")
+async def get_local_earthquakes(limit: int = 50, user: dict = Depends(get_current_user)):
+    """
+    [FASE 1] Devuelve solo sismos en territorio peruano (is_local = true).
+    Util para el panel destacado "Eventos en territorio peruano" del dashboard.
+    """
+    result = (supabase.table("earthquakes")
+              .select("*")
+              .eq("is_local", True)
+              .order("event_time", desc=True)
+              .limit(limit)
+              .execute())
+    return result.data
+
+
+@app.get("/api/earthquakes/by-dhn-level/{level}")
+async def get_earthquakes_by_dhn_level(level: str, limit: int = 50, user: dict = Depends(get_current_user)):
+    """
+    [FASE 1] Devuelve sismos clasificados con un nivel DHN especifico.
+    Niveles validos: INFORMACION | ALERTA | ALARMA | NO_APLICA
+    """
+    level_upper = level.upper()
+    valid_levels = {"INFORMACION", "ALERTA", "ALARMA", "NO_APLICA"}
+    if level_upper not in valid_levels:
+        return {"error": f"Nivel invalido. Validos: {', '.join(sorted(valid_levels))}"}
+
+    result = (supabase.table("earthquakes")
+              .select("*")
+              .eq("dhn_level", level_upper)
+              .order("event_time", desc=True)
+              .limit(limit)
+              .execute())
+    return result.data
+
+
 @app.get("/api/alerts")
-async def get_alerts(limit: int = 20):
+async def get_alerts(limit: int = 20, user: dict = Depends(get_current_user)):
     result = (supabase.table("tsunami_alerts")
               .select("*")
               .order("issued_at", desc=True)
@@ -837,13 +936,13 @@ async def get_alerts(limit: int = 20):
 
 
 @app.get("/api/buoys")
-async def get_buoys():
+async def get_buoys(user: dict = Depends(get_current_user)):
     result = supabase.table("buoy_stations").select("*").execute()
     return result.data
 
 
 @app.get("/api/buoy-readings/{station_id}")
-async def get_buoy_readings(station_id: str, limit: int = 100):
+async def get_buoy_readings(station_id: str, limit: int = 100, user: dict = Depends(get_current_user)):
     result = (supabase.table("buoy_readings")
               .select("*")
               .eq("station_id", station_id)
@@ -854,13 +953,13 @@ async def get_buoy_readings(station_id: str, limit: int = 100):
 
 
 @app.get("/api/thresholds")
-async def get_thresholds():
+async def get_thresholds(user: dict = Depends(get_current_user)):
     result = supabase.table("alert_thresholds").select("*").order("priority").execute()
     return result.data
 
 
 @app.get("/api/news")
-async def get_news(limit: int = 20):
+async def get_news(limit: int = 20, user: dict = Depends(get_current_user)):
     result = (supabase.table("news")
               .select("*")
               .order("published_at", desc=True)
@@ -870,7 +969,7 @@ async def get_news(limit: int = 20):
 
 
 @app.get("/api/fetch-log")
-async def get_fetch_log(limit: int = 50):
+async def get_fetch_log(limit: int = 50, user: dict = Depends(get_current_user)):
     result = (supabase.table("fetch_log")
               .select("*")
               .order("fetched_at", desc=True)
@@ -880,12 +979,11 @@ async def get_fetch_log(limit: int = 50):
 
 
 # ═══════════════════════════════════════════
-#  ENDPOINTS NUEVOS: MAPA MAREOGRÁFICO
+#  ENDPOINTS: MAPA MAREOGRÁFICO
 # ═══════════════════════════════════════════
 
 @app.get("/api/sealevel/stations")
-async def get_sealevel_stations():
-    """Lista de estaciones mareográficas del Pacífico (IOC v2)"""
+async def get_sealevel_stations(user: dict = Depends(get_current_user)):
     try:
         result = supabase.table("sea_level_stations").select("*").execute()
         return {
@@ -894,14 +992,12 @@ async def get_sealevel_stations():
             "source": "IOC-SLSMF-v2"
         }
     except Exception as e:
-        # Si la tabla no existe aún, devolver vacío
         logger.warning(f"sea_level_stations query error: {e}")
         return {"stations": [], "count": 0, "source": "IOC-SLSMF-v2"}
 
 
 @app.get("/api/sealevel/station/{code}")
-async def get_station_data(code: str, hours: int = 24):
-    """Datos de nivel del mar para la curva sinusoidal"""
+async def get_station_data(code: str, hours: int = 24, user: dict = Depends(get_current_user)):
     data = await fetch_station_sea_data(code, hours)
 
     if data:
@@ -920,8 +1016,7 @@ async def get_station_data(code: str, hours: int = 24):
 
 
 @app.get("/api/sealevel/station/{code}/metadata")
-async def get_station_metadata(code: str):
-    """Metadata completa de una estación IOC"""
+async def get_station_metadata(code: str, user: dict = Depends(get_current_user)):
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.get(
@@ -940,7 +1035,7 @@ async def get_station_metadata(code: str):
 
 
 @app.get("/api/dashboard")
-async def get_dashboard():
+async def get_dashboard(user: dict = Depends(get_current_user)):
     """Consolidated endpoint for the frontend dashboard"""
     earthquakes = (supabase.table("earthquakes")
                    .select("*")
@@ -966,7 +1061,6 @@ async def get_dashboard():
             .limit(10)
             .execute()).data
 
-    # Sea level stations count
     try:
         sl_stations = supabase.table("sea_level_stations").select("code,status", count="exact").execute()
         sl_count = sl_stations.count or 0
@@ -975,15 +1069,32 @@ async def get_dashboard():
         sl_count = 0
         sl_online = 0
 
-    # KPIs
+    # KPIs legacy
     critical_count = sum(1 for e in earthquakes if e.get("severity") == "critical")
     warning_count = sum(1 for e in earthquakes if e.get("severity") == "warning")
     alert_buoys = sum(1 for b in buoys if b.get("status") in ("alert", "warning"))
     sources_online = sum(1 for s in sources if s.get("status") == "active")
 
+    # [FASE 1] KPIs nuevos basados en clasificacion DHN
+    dhn_alarma_count = sum(1 for e in earthquakes if e.get("dhn_level") == "ALARMA")
+    dhn_alerta_count = sum(1 for e in earthquakes if e.get("dhn_level") == "ALERTA")
+    dhn_informacion_count = sum(1 for e in earthquakes if e.get("dhn_level") == "INFORMACION")
+    local_count = sum(1 for e in earthquakes if e.get("is_local") is True)
+
+    # [FASE 1] Risk level se calcula ahora con criterios DHN
+    if dhn_alarma_count > 0:
+        risk_level = "ALTO"
+    elif dhn_alerta_count > 0:
+        risk_level = "MEDIO"
+    elif local_count > 0:
+        risk_level = "BAJO-VIGILANCIA"
+    else:
+        risk_level = "BAJO"
+
     return {
         "kpis": {
             "total_earthquakes": len(earthquakes),
+            # Legacy
             "critical_count": critical_count,
             "warning_count": warning_count,
             "active_alerts": len(alerts),
@@ -993,7 +1104,12 @@ async def get_dashboard():
             "total_sources": len(sources),
             "sealevel_stations": sl_count,
             "sealevel_online": sl_online,
-            "risk_level": "ALTO" if critical_count > 0 else "MEDIO" if warning_count > 0 else "BAJO",
+            "risk_level": risk_level,
+            # [FASE 1] KPIs nuevos DHN
+            "dhn_alarma_count": dhn_alarma_count,
+            "dhn_alerta_count": dhn_alerta_count,
+            "dhn_informacion_count": dhn_informacion_count,
+            "local_earthquakes_count": local_count,
         },
         "earthquakes": earthquakes,
         "alerts": alerts,
