@@ -1040,7 +1040,7 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
     earthquakes = (supabase.table("earthquakes")
                    .select("*")
                    .order("event_time", desc=True)
-                   .limit(50)
+                   .limit(500)
                    .execute()).data
 
     alerts = (supabase.table("tsunami_alerts")
