@@ -865,8 +865,8 @@ async def health():
         return {"status": "unhealthy", "error": str(e)}
 
 
-@app.post("/fetch")
-async def trigger_fetch(user: dict = Depends(get_current_user)):
+@app.get("/fetch")
+async def trigger_fetch():
     await fetch_all()
     return {"status": "fetch completed", "timestamp": datetime.now(timezone.utc).isoformat()}
 
