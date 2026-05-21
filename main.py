@@ -172,7 +172,7 @@ async def fetch_usgs():
     start = time.time()
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            r = await client.get("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson")
+            r = await client.get("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson")
             r.raise_for_status()
             data = r.json()
 
