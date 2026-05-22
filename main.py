@@ -477,7 +477,7 @@ KEYWORDS_SEISMICOS = [
 
 RSS_SOURCES_DAILY = [
     ("bbc",  "https://feeds.bbci.co.uk/mundo/rss.xml",                      "BBC Mundo"),
-    ("nyt", "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", "NYT Español"),
+    ("nyt",  "https://rss.nytimes.com/services/xml/rss/nyt/espanol.xml",     "NYT Español"),
     ("wapo", "https://feeds.washingtonpost.com/rss/world",                   "Washington Post"),
 ]
 
@@ -620,32 +620,31 @@ async def generate_daily_news_summary():
         sources_list = [{"source": k, "articles": v} for k, v in sources_used.items()]
         period_label = f"{period_start.strftime('%d/%m/%Y %H:%M')} – {period_end.strftime('%d/%m/%Y %H:%M')} UTC"
 
-        prompt = f"""Eres VIGÍA, el sistema de inteligencia de noticias del CNAT (Centro Nacional de Alerta de Tsunamis) de la Marina de Guerra del Perú.
+        prompt = f"""Eres VIGÍA, sistema de inteligencia de noticias del CNAT (Centro Nacional de Alerta de Tsunamis) de la Marina de Guerra del Perú.
 
-Analiza los siguientes {len(articles)} artículos de prensa capturados en las últimas 24 horas ({period_label}) y genera un resumen ejecutivo estructurado.
+Analiza los siguientes {len(articles)} artículos capturados en las últimas 24 horas ({period_label}) y genera un resumen ejecutivo ESTRICTAMENTE enfocado en riesgos sísmicos y oceánicos.
 
 ARTÍCULOS:
 {articles_text}
 
-INSTRUCCIONES:
-1. Redacta un resumen ejecutivo en español de máximo 400 palabras.
-2. Identifica los 3 eventos más importantes relacionados con actividad sísmica, tsunamis o riesgos oceánicos.
-3. Indica el nivel de alerta informativa global: NORMAL | VIGILANCIA | ELEVADO.
-4. Menciona explícitamente la fuente y fecha de cada evento destacado.
-5. Si hay eventos que afecten directamente al Perú o el Pacífico sur, resáltalos primero.
-6. Termina con una línea de conclusión operativa para los oficiales de guardia del CNAT.
+REGLAS ESTRICTAS:
+1. SOLO desarrolla noticias directamente relacionadas con: sismos, terremotos, tsunamis, volcanes, erupciones, maremotos, nivel del mar, alertas oceánicas, actividad tectónica.
+2. Si hay noticias de salud, política, economía, deportes u otros temas: menciónalas en UNA sola línea como "Se detectaron X noticias sin relevancia sísmica (salud pública, política, etc.)". NO las desarrolles.
+3. Si NO hay noticias sísmicas relevantes: indícalo claramente en una línea: "Sin eventos sísmicos o tsunamis destacados en el período analizado."
+4. Máximo 250 palabras en total.
+5. Menciona fuente y fecha solo para eventos sísmicos.
+6. Termina con una línea de conclusión operativa para el oficial de guardia.
+7. Nivel de alerta: NORMAL si no hay eventos sísmicos, VIGILANCIA si hay sismos menores, ELEVADO si hay sismos M5+ o alertas de tsunami.
 
 Formato de respuesta (JSON estricto, sin texto fuera del JSON):
 {{
-  "resumen": "texto del resumen ejecutivo completo",
+  "resumen": "texto del resumen ejecutivo",
   "nivel_alerta": "NORMAL|VIGILANCIA|ELEVADO",
   "highlights": [
-    {{"evento": "descripción breve", "fuente": "nombre fuente", "fecha": "dd/mm/yyyy HH:MM", "url": "url"}},
-    {{"evento": "...", "fuente": "...", "fecha": "...", "url": "..."}},
-    {{"evento": "...", "fuente": "...", "fecha": "...", "url": "..."}}
+    {{"evento": "descripción breve", "fuente": "nombre fuente", "fecha": "dd/mm/yyyy HH:MM", "url": "url"}}
   ],
   "conclusion_operativa": "una sola frase para el oficial de guardia"
-}}"""
+}}""""""
 
         # 3. Llamar a Claude API
         async with httpx.AsyncClient(timeout=60) as client:
