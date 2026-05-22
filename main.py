@@ -463,7 +463,7 @@ async def fetch_chile():
 
 
 # ═══════════════════════════════════════════
-#  [FASE 2] ESCUCHA SOCIAL — RSS NOTICIAS
+#  [FASE 2] ESCUCHA SOCIAL -- RSS NOTICIAS
 #  Guarda en news_raw Y news (legacy)
 #  Fuentes: BBC Mundo, NYT Español, Washington Post
 # ═══════════════════════════════════════════
@@ -487,7 +487,7 @@ async def fetch_news_rss():
     [FASE 2] Fetcher de noticias RSS diario.
     Guarda artículos relevantes en:
     - news_raw (nueva tabla con fuente, fecha/hora exactas)
-    - news (tabla legacy — compatibilidad frontend)
+    - news (tabla legacy -- compatibilidad frontend)
     """
     for source_id, url, source_name in RSS_SOURCES_DAILY:
         start = time.time()
@@ -598,7 +598,7 @@ async def generate_daily_news_summary():
         articles = result.data or []
 
         if not articles:
-            logger.info("📰 Sin artículos nuevos en las últimas 24h — resumen omitido")
+            logger.info("📰 Sin artículos nuevos en las últimas 24h -- resumen omitido")
             return
 
         # 2. Construir contexto para Claude
@@ -644,7 +644,7 @@ Formato de respuesta (JSON estricto, sin texto fuera del JSON):
     {{"evento": "descripción breve", "fuente": "nombre fuente", "fecha": "dd/mm/yyyy HH:MM", "url": "url"}}
   ],
   "conclusion_operativa": "una sola frase para el oficial de guardia"
-}}""""""
+}}"""
 
         # 3. Llamar a Claude API
         async with httpx.AsyncClient(timeout=60) as client:
@@ -977,7 +977,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="CNAT - Sistema de Alerta Temprana de Tsunamis",
-    description="Backend de ingesta de datos — DHN Marina de Guerra del Perú | MICROHELP © 2026",
+    description="Backend de ingesta de datos -- DHN Marina de Guerra del Perú | MICROHELP © 2026",
     version="2.2.0",  # [FASE 2] Escucha Social Inteligente
     lifespan=lifespan,
 )
@@ -1130,7 +1130,7 @@ async def get_thresholds(user: dict = Depends(get_current_user)):
 
 @app.get("/api/news")
 async def get_news(limit: int = 20, user: dict = Depends(get_current_user)):
-    """Endpoint legacy — tabla news original"""
+    """Endpoint legacy -- tabla news original"""
     result = (supabase.table("news")
               .select("*")
               .order("published_at", desc=True)
@@ -1162,7 +1162,7 @@ async def get_news_summary(limit: int = 5, user: dict = Depends(get_current_user
 
 @app.get("/api/news/summary/latest")
 async def get_latest_summary(user: dict = Depends(get_current_user)):
-    """[FASE 2] Último resumen diario — usado por ARIA/VIGÍA"""
+    """[FASE 2] Último resumen diario -- usado por ARIA/VIGÍA"""
     result = (supabase.table("news_summaries")
               .select("*")
               .order("generated_at", desc=True)
