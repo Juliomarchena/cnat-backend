@@ -477,7 +477,7 @@ KEYWORDS_SEISMICOS = [
 
 RSS_SOURCES_DAILY = [
     ("bbc",  "https://feeds.bbci.co.uk/mundo/rss.xml",                      "BBC Mundo"),
-    ("nyt",  "https://rss.nytimes.com/services/xml/rss/nyt/espanol.xml",     "NYT Español"),
+    ("nyt", "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", "NYT Español"),
     ("wapo", "https://feeds.washingtonpost.com/rss/world",                   "Washington Post"),
 ]
 
