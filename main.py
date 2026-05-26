@@ -28,6 +28,8 @@ import hashlib
 import logging
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
+import asyncio
+from igp_stream import start_igp_stream
 
 import httpx
 import feedparser
@@ -968,6 +970,9 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(fetch_daily, "cron", hour=6, minute=0, id="fetch_daily")
     scheduler.start()
     logger.info("Scheduler: fetch/5min | sea_level/30min | resumen_diario/06:00UTC")
+    # [FASE 3] IGP Twitter Filtered Stream
+    asyncio.create_task(start_igp_stream(supabase))
+    logger.info("🐦 IGP Filtered Stream: iniciado")
 
     yield
 
@@ -1254,6 +1259,10 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
         latest_summary = summary_result.data[0] if summary_result.data else None
     except Exception:
         latest_summary = None
+        try:
+        igp_tweets = supabase.table("igp_tweets").select("*").order("published_at", desc=True).limit(5).execute().data
+    except Exception:
+        igp_tweets = []
 
     try:
         sl_stations = supabase.table("sea_level_stations").select("code,status", count="exact").execute()
@@ -1309,4 +1318,5 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
         "news":         news,
         "news_summary": latest_summary,   # [FASE 2] para ARIA/VIGÍA
         "last_update":  datetime.now(timezone.utc).isoformat(),
+        "igp_tweets":   igp_tweets,        # [FASE 3]
     }
