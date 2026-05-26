@@ -971,7 +971,8 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info("Scheduler: fetch/5min | sea_level/30min | resumen_diario/06:00UTC")
     # [FASE 3] IGP Twitter Filtered Stream
-    asyncio.create_task(start_igp_stream(supabase))
+   # asyncio.create_task(start_igp_stream(supabase))
+   asyncio.ensure_future(start_igp_stream(supabase))
     logger.info("🐦 IGP Filtered Stream: iniciado")
 
     yield
