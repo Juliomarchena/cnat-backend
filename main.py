@@ -36,6 +36,7 @@ from contextlib import asynccontextmanager
 import asyncio
 from igp_stream import start_igp_stream
 from telegram_igp import fetch_telegram_igp
+from igp_web import fetch_igp_web
 
 import httpx
 import feedparser
@@ -953,6 +954,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(fetch_slow,  "interval", minutes=30, id="fetch_slow")
     scheduler.add_job(fetch_daily, "cron", hour=6, minute=0, id="fetch_daily")
     scheduler.add_job(fetch_telegram_igp, "interval", minutes=5, id="telegram_igp", args=[supabase])
+    scheduler.add_job(fetch_igp_web, "interval", minutes=5, id="igp_web", args=[supabase])
     scheduler.start()
     logger.info("Scheduler: fetch/5min | sea_level/30min | resumen_diario/06:00UTC")
 
@@ -961,6 +963,8 @@ async def lifespan(app: FastAPI):
     logger.info("🐦 IGP Filtered Stream: iniciado")
     asyncio.create_task(fetch_telegram_igp(supabase))
     logger.info("📡 Telegram IGP: scraper iniciado (@sismos_peru_igp)")
+    asyncio.create_task(fetch_igp_web(supabase))
+    logger.info("🌐 IGP Web scraper iniciado (ultimosismo.igp.gob.pe)")
 
     yield
 
