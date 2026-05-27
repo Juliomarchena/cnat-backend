@@ -147,6 +147,9 @@ async def start_igp_stream(supabase_client):
     if not TWITTER_BEARER_TOKEN:
         logger.warning("IGP Stream: TWITTER_BEARER_TOKEN no configurado — stream desactivado")
         return
+    
+    # Esperar 15s para que la conexión anterior se cierre
+    await asyncio.sleep(15)
 
     logger.info("🐦 IGP Stream: configurando regla de filtro...")
     await _setup_rule()
