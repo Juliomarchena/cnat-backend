@@ -1,27 +1,22 @@
 """
 igp_stream.py
-IGP/CENSIS — Twitter Filtered Stream
-Marina de Guerra del Perú | MICROHELP © 2026
+CNAT - Centro Nacional de Alerta de Tsunamis
+IGP/CENSIS — Twitter Polling (reemplaza Filtered Stream)
+MICROHELP © 2026
 
-Módulo independiente que escucha en tiempo real los tweets
-de @Sismos_Peru_IGP y los guarda en la tabla igp_tweets.
+Polling cada 5 minutos a GET /2/tweets/search/recent
+Sin conexión persistente → sin 429 TooManyConnections.
+Guarda tweets sísmicos en tabla igp_tweets.
 
-IMPORTANTE:
-- Solo se activa cuando el IGP publica un tweet sísmico
-- Heartbeats vacíos NO cuestan nada
-- Costo estimado: ~$1.50/mes (300 tweets x $0.005)
-- Reconexión automática si se cae el stream
-
-USO EN main.py:
+USO EN main.py (sin cambios necesarios):
     from igp_stream import start_igp_stream
-    # En lifespan, después de scheduler.start():
     asyncio.create_task(start_igp_stream(supabase))
 """
 
 import re
 import os
-import json
 import asyncio
+import hashlib
 import logging
 from datetime import datetime, timezone
 
@@ -30,9 +25,14 @@ import httpx
 logger = logging.getLogger("cnat.igp")
 
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN", "")
+POLL_INTERVAL        = 300  # 5 minutos
+QUERY                = "from:Sismos_Peru_IGP (Magnitud OR Profundidad OR REPORTE OR sismo)"
+MAX_RESULTS          = 10
+
+# Último tweet_id procesado — evita duplicados sin consultar Supabase
+_last_tweet_id = None
 
 
-# ─── Headers Twitter API v2 ───
 def _headers():
     return {
         "Authorization": f"Bearer {TWITTER_BEARER_TOKEN}",
@@ -40,19 +40,19 @@ def _headers():
     }
 
 
-# ─── Parsea el texto del tweet IGP ───
+def make_id(*parts):
+    raw = "-".join(str(p) for p in parts)
+    return hashlib.md5(raw.encode()).hexdigest()[:16]
+
+
 def parse_igp_tweet(text: str) -> dict:
     """
-    Parsea el formato estándar del IGP/CENSIS:
-
-    IGP/CENSIS/RS 2026-0293
-    Fecha y Hora Local: 20/05/2026 07:14:12
-    Magnitud: 3.6
-    Profundidad: 60km
-    Latitud: -14.24
-    Longitud: -75.74
+    Parsea el formato estándar IGP/CENSIS:
+    IGP/CENSIS/RS 2026-0314
+    Magnitud: 3.8 | Profundidad: 62km
+    Latitud: -14.24 | Longitud: -75.74
     Intensidad: II Ica
-    Referencia: 19 km al S de Ica, Ica - Ica
+    Referencia: 19 km al S de Ica
     """
     result = {
         "magnitude":  None,
@@ -63,6 +63,8 @@ def parse_igp_tweet(text: str) -> dict:
         "lugar":      None,
         "reporte_id": None,
     }
+    if not text:
+        return result
     try:
         m = re.search(r'RS\s+([\d\-]+)', text)
         if m: result["reporte_id"] = m.group(1).strip()
@@ -76,7 +78,7 @@ def parse_igp_tweet(text: str) -> dict:
         m = re.search(r'[Ll]at(?:itud)?[:\s]+([\-\d\.]+)', text)
         if m: result["latitude"] = float(m.group(1))
 
-        m = re.search(r'[Ll]ong(?:itud)?[:\s]+([\-\d\.]+)', text)
+        m = re.search(r'[Ll]on(?:gitud)?[:\s]+([\-\d\.]+)', text)
         if m: result["longitude"] = float(m.group(1))
 
         m = re.search(r'[Ii]ntensidad[:\s]+([^\n]+)', text)
@@ -86,155 +88,112 @@ def parse_igp_tweet(text: str) -> dict:
         if m: result["lugar"] = m.group(1).strip()[:200]
 
     except Exception as e:
-        logger.warning(f"parse_igp_tweet error: {e}")
-
+        logger.warning(f"IGP parse error: {e}")
     return result
 
 
-# ─── Configura el filtro del stream ───
-async def _setup_rule():
+async def _fetch_recent_tweets(supabase) -> int:
     """
-    Regla quirúrgica: SOLO tweets de @Sismos_Peru_IGP
-    que contengan palabras sísmicas clave.
-    Ningún otro tweet pasará este filtro.
+    Hace un GET /2/tweets/search/recent y guarda nuevos tweets.
+    Retorna número de tweets nuevos guardados.
     """
-    rule_value = 'from:Sismos_Peru_IGP (Magnitud OR Profundidad OR REPORTE OR sismo)'
-    rule_tag   = 'IGP_CENSIS_SISMOS'
+    global _last_tweet_id
+
+    if not TWITTER_BEARER_TOKEN:
+        logger.warning("🐦 IGP: TWITTER_BEARER_TOKEN no configurado")
+        return 0
+
+    params = {
+        "query":        QUERY,
+        "max_results":  MAX_RESULTS,
+        "tweet.fields": "created_at,author_id,text",
+        "expansions":   "author_id",
+        "user.fields":  "username",
+    }
+    if _last_tweet_id:
+        params["since_id"] = _last_tweet_id
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-
-            # 1. Ver reglas existentes
-            r        = await client.get(
-                "https://api.twitter.com/2/tweets/search/stream/rules",
-                headers=_headers()
-            )
-            existing = r.json().get("data", [])
-
-            # 2. Eliminar reglas antiguas con el mismo tag
-            ids_del = [x["id"] for x in existing if x.get("tag") == rule_tag]
-            if ids_del:
-                await client.post(
-                    "https://api.twitter.com/2/tweets/search/stream/rules",
-                    headers=_headers(),
-                    json={"delete": {"ids": ids_del}}
-                )
-                logger.info(f"IGP Stream: {len(ids_del)} regla(s) antigua(s) eliminada(s)")
-
-            # 3. Crear regla nueva
-            r2     = await client.post(
-                "https://api.twitter.com/2/tweets/search/stream/rules",
+            r = await client.get(
+                "https://api.twitter.com/2/tweets/search/recent",
                 headers=_headers(),
-                json={"add": [{"value": rule_value, "tag": rule_tag}]}
+                params=params,
             )
-            result = r2.json()
-            logger.info(f"IGP Stream: regla configurada → {result}")
+
+        if r.status_code == 429:
+            logger.warning("🐦 IGP: rate limit — esperando próximo ciclo")
+            return 0
+
+        if r.status_code != 200:
+            logger.error(f"🐦 IGP: HTTP {r.status_code} — {r.text[:200]}")
+            return 0
+
+        data     = r.json()
+        tweets   = data.get("data", [])
+        users    = {u["id"]: u["username"] for u in data.get("includes", {}).get("users", [])}
+
+        if not tweets:
+            logger.info("🐦 IGP: sin tweets nuevos")
+            return 0
+
+        records = []
+        for tw in tweets:
+            text      = tw.get("text", "")
+            tw_id     = tw.get("id", "")
+            author_id = tw.get("author_id", "")
+            username  = users.get(author_id, "Sismos_Peru_IGP")
+            created   = tw.get("created_at", datetime.now(timezone.utc).isoformat())
+
+            parsed    = parse_igp_tweet(text)
+            tweet_id  = make_id("tw", tw_id)
+
+            records.append({
+                "id":           tweet_id,
+                "tweet_id":     tw_id,
+                "author":       f"@{username}",
+                "raw_text":     text[:1000],
+                "published_at": created,
+                "magnitude":    parsed["magnitude"],
+                "depth_km":     parsed["depth_km"],
+                "latitude":     parsed["latitude"],
+                "longitude":    parsed["longitude"],
+                "intensidad":   parsed["intensidad"],
+                "lugar":        parsed["lugar"],
+                "reporte_id":   parsed["reporte_id"],
+                "source":       "twitter",
+            })
+
+        # Guardar en Supabase
+        supabase.table("igp_tweets").upsert(records, on_conflict="id").execute()
+
+        # Actualizar cursor — el más reciente es el primero
+        _last_tweet_id = tweets[0]["id"]
+
+        logger.info(f"🐦 IGP: {len(records)} tweet(s) nuevo(s) guardados")
+        return len(records)
 
     except Exception as e:
-        logger.error(f"IGP _setup_rule error: {e}")
+        logger.error(f"🐦 IGP polling error: {e}")
+        return 0
 
 
-# ─── Stream principal ───
 async def start_igp_stream(supabase_client):
     """
-    Punto de entrada principal.
-    Llamar desde main.py con:
-        asyncio.create_task(start_igp_stream(supabase))
-
-    Escucha indefinidamente con reconexión automática.
-    Cada tweet sísmico del IGP se guarda en igp_tweets.
+    Loop de polling cada 5 minutos.
+    Reemplaza el Filtered Stream — sin conexión persistente.
+    Compatible con el mismo import en main.py.
     """
     if not TWITTER_BEARER_TOKEN:
-        logger.warning("IGP Stream: TWITTER_BEARER_TOKEN no configurado — stream desactivado")
+        logger.warning("🐦 IGP: TWITTER_BEARER_TOKEN no configurado — polling desactivado")
         return
-    
-    # Esperar 15s para que la conexión anterior se cierre
-    await asyncio.sleep(15)
 
-    logger.info("🐦 IGP Stream: configurando regla de filtro...")
-    await _setup_rule()
+    logger.info("🐦 IGP: polling iniciado (@Sismos_Peru_IGP cada 5 min)")
 
-    stream_url = (
-        "https://api.twitter.com/2/tweets/search/stream"
-        "?tweet.fields=created_at,author_id,text"
-        "&expansions=author_id"
-        "&user.fields=username"
-    )
+    # Primera consulta inmediata al arrancar
+    await _fetch_recent_tweets(supabase_client)
 
-    logger.info("🐦 IGP Stream: conectado — escuchando @Sismos_Peru_IGP en tiempo real...")
-
-    while True:  # Reconexión automática
-        try:
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream(
-                    "GET", stream_url, headers=_headers()
-                ) as response:
-
-                    if response.status_code != 200:
-                        body = await response.aread()
-                        logger.error(f"IGP Stream HTTP {response.status_code}: {body[:200]}")
-                        await asyncio.sleep(60)
-                        continue
-
-                    logger.info("🐦 IGP Stream: conexión activa — esperando sismos...")
-
-                    async for line in response.aiter_lines():
-
-                        # Heartbeat vacío — no cobra nada, ignorar
-                        if not line.strip():
-                            continue
-
-                        try:
-                            payload    = json.loads(line)
-                            tweet      = payload.get("data", {})
-                            tweet_id   = tweet.get("id",   "")
-                            tweet_text = tweet.get("text", "")
-                            created_at = tweet.get(
-                                "created_at",
-                                datetime.now(timezone.utc).isoformat()
-                            )
-
-                            if not tweet_id or not tweet_text:
-                                continue
-
-                            # Parsear campos sísmicos
-                            parsed = parse_igp_tweet(tweet_text)
-
-                            # Guardar en Supabase
-                            supabase_client.table("igp_tweets").upsert([{
-                                "id":           tweet_id,
-                                "tweet_text":   tweet_text[:1000],
-                                "published_at": created_at,
-                                "magnitude":    parsed["magnitude"],
-                                "depth_km":     parsed["depth_km"],
-                                "latitude":     parsed["latitude"],
-                                "longitude":    parsed["longitude"],
-                                "intensidad":   parsed["intensidad"],
-                                "lugar":        parsed["lugar"],
-                                "reporte_id":   parsed["reporte_id"],
-                            }], on_conflict="id").execute()
-
-                            logger.info(
-                                f"🐦 IGP Tweet guardado: "
-                                f"M{parsed['magnitude']} | "
-                                f"{parsed['lugar']} | "
-                                f"RS:{parsed['reporte_id']}"
-                            )
-
-                        except json.JSONDecodeError:
-                            continue
-                        except Exception as e:
-                            logger.error(f"IGP tweet process error: {e}")
-                            continue
-
-        except httpx.ReadTimeout:
-            logger.warning("🐦 IGP Stream: timeout — reconectando en 30s...")
-            await asyncio.sleep(30)
-
-        except httpx.ConnectError:
-            logger.warning("🐦 IGP Stream: sin conexión — reconectando en 60s...")
-            await asyncio.sleep(60)
-
-        except Exception as e:
-            logger.error(f"🐦 IGP Stream error inesperado: {e} — reconectando en 60s...")
-            await asyncio.sleep(60)
+    # Loop cada 5 minutos
+    while True:
+        await asyncio.sleep(POLL_INTERVAL)
+        await _fetch_recent_tweets(supabase_client)
