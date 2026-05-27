@@ -35,6 +35,7 @@ from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 import asyncio
 from igp_stream import start_igp_stream
+from telegram_igp import fetch_telegram_igp
 
 import httpx
 import feedparser
@@ -951,12 +952,15 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(fetch_all,   "interval", minutes=5,  id="fetch_all")
     scheduler.add_job(fetch_slow,  "interval", minutes=30, id="fetch_slow")
     scheduler.add_job(fetch_daily, "cron", hour=6, minute=0, id="fetch_daily")
+    scheduler.add_job(fetch_telegram_igp, "interval", minutes=5, id="telegram_igp", args=[supabase])
     scheduler.start()
     logger.info("Scheduler: fetch/5min | sea_level/30min | resumen_diario/06:00UTC")
 
     # [FASE 3] IGP Twitter Filtered Stream — arranque correcto dentro del event loop
     asyncio.create_task(start_igp_stream(supabase))
     logger.info("🐦 IGP Filtered Stream: iniciado")
+    asyncio.create_task(fetch_telegram_igp(supabase))
+    logger.info("📡 Telegram IGP: scraper iniciado (@sismos_peru_igp)")
 
     yield
 
@@ -1212,6 +1216,12 @@ async def get_station_metadata(code: str, user: dict = Depends(get_current_user)
         logger.error(f"Metadata error for {code}: {e}")
         return {"code": code, "error": str(e)}
 
+
+@app.get("/api/telegram-igp")
+async def trigger_telegram_igp():
+    """[FASE 3.1] Dispara manualmente el scraper de Telegram IGP"""
+    count = await fetch_telegram_igp(supabase)
+    return {"status": "ok", "new_messages": count, "timestamp": datetime.now(timezone.utc).isoformat()}
 
 @app.get("/api/dashboard")
 async def get_dashboard(user: dict = Depends(get_current_user)):
