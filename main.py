@@ -18,6 +18,11 @@ FASE 2 (22/05/2026): Escucha Social Inteligente
 - Scheduler diario para generación automática de resumen
 - ARIA/VIGÍA consulta news_summaries en sus reportes
 - fetch_mode en sources: realtime | daily | pending
+
+FASE 3 (27/05/2026): IGP Twitter Filtered Stream
+- igp_stream.py: módulo independiente que escucha @Sismos_Peru_IGP
+- Tabla igp_tweets en Supabase
+- Panel de tweets IGP en dashboard
 ============================================================
 """
 
@@ -50,14 +55,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("cnat")
 
 # ─── Config ───
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-IOC_API_KEY  = os.getenv("IOC_API_KEY", "")
+SUPABASE_URL      = os.getenv("SUPABASE_URL")
+SUPABASE_KEY      = os.getenv("SUPABASE_KEY")
+IOC_API_KEY       = os.getenv("IOC_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-supabase: Client = None
+supabase: Client  = None
 
 HTTP_TIMEOUT = 30
-scheduler = AsyncIOScheduler()
+scheduler    = AsyncIOScheduler()
 
 # ─── IOC API v2 Config ───
 IOC_V2_BASE = "https://api.ioc-sealevelmonitoring.org/v2"
@@ -67,14 +72,14 @@ def get_ioc_headers():
 
 # ─── Filtro Pacífico ───
 PACIFIC_ZONES = [
-    {"lon_min": -180, "lon_max": -70, "lat_min": -60, "lat_max": 65},
-    {"lon_min": 100,  "lon_max": 180, "lat_min": -60, "lat_max": 65},
+    {"lon_min": -180, "lon_max": -70,  "lat_min": -60, "lat_max": 65},
+    {"lon_min":  100, "lon_max":  180, "lat_min": -60, "lat_max": 65},
 ]
 
 def is_in_pacific(lat: float, lon: float) -> bool:
     for zone in PACIFIC_ZONES:
         if (zone["lon_min"] <= lon <= zone["lon_max"] and
-            zone["lat_min"] <= lat <= zone["lat_max"]):
+                zone["lat_min"] <= lat <= zone["lat_max"]):
             return True
     return False
 
@@ -87,9 +92,9 @@ def make_id(*parts):
 
 def classify_severity(mag, depth):
     """
-    Funcion legacy de clasificacion por severity.
+    Función legacy de clasificación por severity.
     [FASE 1]: Se mantiene para compatibilidad con frontend existente.
-    La clasificacion oficial DHN se hace ahora en classify_dhn() del modulo dhn_classifier.
+    La clasificación oficial DHN se hace ahora en classify_dhn() del módulo dhn_classifier.
     """
     if mag >= 7.5 and depth <= 60:
         return "critical"
@@ -104,7 +109,7 @@ def classify_severity(mag, depth):
     return "normal"
 
 
-# ─── [FASE 1] Helper para construir record con clasificacion DHN ───
+# ─── [FASE 1] Helper para construir record con clasificación DHN ───
 def build_earthquake_record(eq_id, source_id, magnitude, depth_km, latitude, longitude,
                             place, event_time, tsunami_flag=0, alert_level=None,
                             raw_data=None):
@@ -239,13 +244,14 @@ async def fetch_ptwc():
                 severity = "warning"; alert_type = "ALERTA"
 
             records.append({
-                "id": alert_id, "source_id": source_id,
+                "id":         alert_id,
+                "source_id":  source_id,
                 "alert_type": alert_type,
-                "title":   title[:500] if title else "PTWC Bulletin",
-                "message": summary[:2000] if summary else "",
-                "issued_at": updated or datetime.now(timezone.utc).isoformat(),
-                "severity": severity,
-                "raw_data": json.dumps({"title": title, "links": [l.get("href") for l in entry.get("links", [])]}),
+                "title":      title[:500] if title else "PTWC Bulletin",
+                "message":    summary[:2000] if summary else "",
+                "issued_at":  updated or datetime.now(timezone.utc).isoformat(),
+                "severity":   severity,
+                "raw_data":   json.dumps({"title": title, "links": [l.get("href") for l in entry.get("links", [])]}),
             })
 
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
@@ -264,13 +270,14 @@ async def fetch_ptwc():
                         severity = "warning"; alert_type = "ALERTA"
 
                     records.append({
-                        "id": alert_id, "source_id": source_id,
+                        "id":         alert_id,
+                        "source_id":  source_id,
                         "alert_type": alert_type,
-                        "title":   title[:500] if title else "NTWC Bulletin",
-                        "message": summary[:2000] if summary else "",
-                        "issued_at": entry.get("updated", datetime.now(timezone.utc).isoformat()),
-                        "severity": severity,
-                        "raw_data": json.dumps({"title": title}),
+                        "title":      title[:500] if title else "NTWC Bulletin",
+                        "message":    summary[:2000] if summary else "",
+                        "issued_at":  entry.get("updated", datetime.now(timezone.utc).isoformat()),
+                        "severity":   severity,
+                        "raw_data":   json.dumps({"title": title}),
                     })
 
         if records:
@@ -320,11 +327,11 @@ async def fetch_ndbc_dart():
                             year   = 2000 + int(yy) if int(yy) < 100 else int(yy)
                             reading_time = datetime(year, int(mm), int(dd), int(hh), int(mn), int(ss), tzinfo=timezone.utc)
                             readings.append({
-                                "station_id":    station_id,
-                                "reading_time":  reading_time.isoformat(),
+                                "station_id":     station_id,
+                                "reading_time":   reading_time.isoformat(),
                                 "water_level_mm": height,
-                                "anomaly_mm":    0,
-                                "is_event_mode": t_type == "2",
+                                "anomaly_mm":     0,
+                                "is_event_mode":  t_type == "2",
                             })
                         except (ValueError, IndexError):
                             continue
@@ -478,9 +485,9 @@ KEYWORDS_SEISMICOS = [
 ]
 
 RSS_SOURCES_DAILY = [
-    ("bbc",  "https://feeds.bbci.co.uk/mundo/rss.xml",                      "BBC Mundo"),
-    ("nyt",  "https://rss.nytimes.com/services/xml/rss/nyt/espanol.xml",     "NYT Español"),
-    ("wapo", "https://feeds.washingtonpost.com/rss/world",                   "Washington Post"),
+    ("bbc",  "https://feeds.bbci.co.uk/mundo/rss.xml",             "BBC Mundo"),
+    ("nyt",  "https://rss.nytimes.com/services/xml/rss/nyt/espanol.xml", "NYT Español"),
+    ("wapo", "https://feeds.washingtonpost.com/rss/world",          "Washington Post"),
 ]
 
 
@@ -499,13 +506,13 @@ async def fetch_news_rss():
                 r.raise_for_status()
 
             feed         = feedparser.parse(r.text)
-            records_raw  = []   # → news_raw
-            records_news = []   # → news (legacy)
+            records_raw  = []
+            records_news = []
             fetched_at   = datetime.now(timezone.utc).isoformat()
 
             for entry in feed.entries[:50]:
-                title   = entry.get("title", "")
-                summary = entry.get("summary", "") or entry.get("description", "")
+                title    = entry.get("title", "")
+                summary  = entry.get("summary", "") or entry.get("description", "")
                 combined = (title + " " + summary).lower()
 
                 if not any(kw in combined for kw in KEYWORDS_SEISMICOS):
@@ -516,10 +523,8 @@ async def fetch_news_rss():
                     kw in combined for kw in ["tsunami", "terremoto", "alarma", "maremoto"]
                 ) else "info"
 
-                # Detectar palabras clave presentes
                 found_keywords = [kw for kw in KEYWORDS_SEISMICOS if kw in combined]
 
-                # Fecha de publicación
                 published_raw = entry.get("published", entry.get("updated", ""))
                 try:
                     import email.utils
@@ -527,7 +532,6 @@ async def fetch_news_rss():
                 except Exception:
                     published_dt = fetched_at
 
-                # ── news_raw ──
                 records_raw.append({
                     "id":           news_id,
                     "source_id":    source_id,
@@ -541,7 +545,6 @@ async def fetch_news_rss():
                     "processed":    False,
                 })
 
-                # ── news legacy ──
                 records_news.append({
                     "id":           news_id,
                     "source_id":    source_id,
@@ -571,24 +574,16 @@ async def fetch_news_rss():
 
 # ═══════════════════════════════════════════
 #  [FASE 2] RESUMEN DIARIO INTELIGENTE
-#  Genera resumen con Claude y guarda en news_summaries
 # ═══════════════════════════════════════════
 
 async def generate_daily_news_summary():
-    """
-    [FASE 2] Genera un resumen diario de noticias relevantes usando Claude API.
-    Lee las últimas 24h de news_raw, llama a Claude, guarda en news_summaries.
-    Lo consume ARIA/VIGÍA para enriquecer sus reportes.
-    """
     logger.info("📰 Generando resumen diario de noticias con Claude...")
-    start = time.time()
-
-    now         = datetime.now(timezone.utc)
-    period_end  = now
+    start        = time.time()
+    now          = datetime.now(timezone.utc)
+    period_end   = now
     period_start = now - timedelta(hours=24)
 
     try:
-        # 1. Leer artículos de las últimas 24h desde news_raw
         result = (
             supabase.table("news_raw")
             .select("title, content, url, published_at, source_id, keywords, relevance")
@@ -603,7 +598,6 @@ async def generate_daily_news_summary():
             logger.info("📰 Sin artículos nuevos en las últimas 24h -- resumen omitido")
             return
 
-        # 2. Construir contexto para Claude
         articles_text = ""
         sources_used  = {}
         for i, a in enumerate(articles, 1):
@@ -648,7 +642,6 @@ Formato de respuesta (JSON estricto, sin texto fuera del JSON):
   "conclusion_operativa": "una sola frase para el oficial de guardia"
 }}"""
 
-        # 3. Llamar a Claude API
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
                 "https://api.anthropic.com/v1/messages",
@@ -668,29 +661,24 @@ Formato de respuesta (JSON estricto, sin texto fuera del JSON):
 
         raw_text = claude_data["content"][0]["text"].strip()
 
-        # 4. Parsear JSON de respuesta
         try:
             parsed = json.loads(raw_text)
         except json.JSONDecodeError:
-            # Fallback: extraer JSON del texto
             import re
-            match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+            match  = re.search(r'\{.*\}', raw_text, re.DOTALL)
             parsed = json.loads(match.group()) if match else {}
 
-        resumen_text     = parsed.get("resumen", raw_text)
-        nivel_alerta     = parsed.get("nivel_alerta", "NORMAL")
-        highlights       = parsed.get("highlights", [])
-        conclusion       = parsed.get("conclusion_operativa", "")
+        resumen_text = parsed.get("resumen", raw_text)
+        nivel_alerta = parsed.get("nivel_alerta", "NORMAL")
+        highlights   = parsed.get("highlights", [])
+        conclusion   = parsed.get("conclusion_operativa", "")
 
-        # Agregar conclusión al final del resumen si existe
         if conclusion:
             resumen_text += f"\n\n📋 CONCLUSIÓN OPERATIVA: {conclusion}"
 
-        # Mapear nivel a score numérico
         relevance_score_map = {"NORMAL": 3.0, "VIGILANCIA": 6.0, "ELEVADO": 9.0}
-        relevance_score = relevance_score_map.get(nivel_alerta, 3.0)
+        relevance_score     = relevance_score_map.get(nivel_alerta, 3.0)
 
-        # 5. Guardar en news_summaries
         summary_id = make_id("summary", now.isoformat())
         supabase.table("news_summaries").upsert([{
             "id":              summary_id,
@@ -705,7 +693,6 @@ Formato de respuesta (JSON estricto, sin texto fuera del JSON):
             "highlights":      json.dumps(highlights),
         }], on_conflict="id").execute()
 
-        # 6. Marcar artículos como procesados
         article_ids = [a.get("id") for a in articles if a.get("id")]
         if article_ids:
             for art_id in article_ids:
@@ -776,17 +763,17 @@ async def fetch_sea_level_stations_v2():
     start     = time.time()
     logger.info("🌊 Fetching IOC sea level stations v2 (Pacific filter)...")
 
-    now_iso      = datetime.now(timezone.utc).isoformat()
+    now_iso       = datetime.now(timezone.utc).isoformat()
     PERU_PRIORITY = [
-        {"code": "call2", "name": "Callao",            "country": "Peru", "lat": -12.07, "lon": -77.17, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "IsHor", "name": "Isla Hormiga, Lima","country": "Peru", "lat": -11.98, "lon": -77.73, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "chim1", "name": "Chimbote",          "country": "Peru", "lat":  -9.08, "lon": -78.61, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "pait",  "name": "Paita",             "country": "Peru", "lat":  -5.08, "lon": -81.11, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "talr",  "name": "Talara",            "country": "Peru", "lat":  -4.58, "lon": -81.28, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "mata",  "name": "Matarani",          "country": "Peru", "lat": -17.00, "lon": -72.11, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "sanjn", "name": "San Juan",          "country": "Peru", "lat": -15.36, "lon": -75.16, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "pdas",  "name": "Pisco / San Andres","country": "Peru", "lat": -13.72, "lon": -76.22, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "ilo1",  "name": "Ilo",               "country": "Peru", "lat": -17.64, "lon": -71.34, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "call2", "name": "Callao",             "country": "Peru", "lat": -12.07, "lon": -77.17, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "IsHor", "name": "Isla Hormiga, Lima", "country": "Peru", "lat": -11.98, "lon": -77.73, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "chim1", "name": "Chimbote",           "country": "Peru", "lat":  -9.08, "lon": -78.61, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "pait",  "name": "Paita",              "country": "Peru", "lat":  -5.08, "lon": -81.11, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "talr",  "name": "Talara",             "country": "Peru", "lat":  -4.58, "lon": -81.28, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "mata",  "name": "Matarani",           "country": "Peru", "lat": -17.00, "lon": -72.11, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "sanjn", "name": "San Juan",           "country": "Peru", "lat": -15.36, "lon": -75.16, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "pdas",  "name": "Pisco / San Andres", "country": "Peru", "lat": -13.72, "lon": -76.22, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "ilo1",  "name": "Ilo",                "country": "Peru", "lat": -17.64, "lon": -71.34, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
     ]
     peru_codes_lower = {s["code"].lower() for s in PERU_PRIORITY}
 
@@ -839,7 +826,7 @@ async def fetch_sea_level_stations_v2():
                     "transmit_type": station.get("transmittype", ""),
                     "operator":      station.get("localoperator", ""),
                     "source":        "IOC-SLSMF-v2",
-                    "fetched_at":    now_iso
+                    "fetched_at":    now_iso,
                 })
 
             except (ValueError, TypeError, KeyError) as e:
@@ -926,18 +913,16 @@ async def fetch_all():
     await fetch_ndbc_dart()
     await fetch_iris()
     await fetch_chile()
-    await fetch_news_rss()       # [FASE 2] BBC + NYT + WaPo → news_raw + news
+    await fetch_news_rss()
     logger.info("═══ Fetch cycle complete ═══")
 
 
 async def fetch_slow():
-    """Less frequent fetches (every 30 min)"""
     await fetch_sea_level()
     await fetch_sea_level_stations_v2()
 
 
 async def fetch_daily():
-    """[FASE 2] Tareas diarias: resumen inteligente de noticias"""
     await generate_daily_news_summary()
 
 
@@ -963,16 +948,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"⚠️ Initial fetch_slow failed (non-fatal): {e}")
 
-    # Schedulers
     scheduler.add_job(fetch_all,   "interval", minutes=5,  id="fetch_all")
     scheduler.add_job(fetch_slow,  "interval", minutes=30, id="fetch_slow")
-    # [FASE 2] Resumen diario a las 06:00 UTC (01:00 Lima)
     scheduler.add_job(fetch_daily, "cron", hour=6, minute=0, id="fetch_daily")
     scheduler.start()
     logger.info("Scheduler: fetch/5min | sea_level/30min | resumen_diario/06:00UTC")
-    # [FASE 3] IGP Twitter Filtered Stream
-   # asyncio.create_task(start_igp_stream(supabase))
-   asyncio.ensure_future(start_igp_stream(supabase))
+
+    # [FASE 3] IGP Twitter Filtered Stream — arranque correcto dentro del event loop
+    asyncio.create_task(start_igp_stream(supabase))
     logger.info("🐦 IGP Filtered Stream: iniciado")
 
     yield
@@ -984,7 +967,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="CNAT - Sistema de Alerta Temprana de Tsunamis",
     description="Backend de ingesta de datos -- DHN Marina de Guerra del Perú | MICROHELP © 2026",
-    version="2.2.0",  # [FASE 2] Escucha Social Inteligente
+    version="2.3.0",  # [FASE 3] IGP Twitter Stream
     lifespan=lifespan,
 )
 
@@ -1011,24 +994,8 @@ async def root():
         "system":   "CNAT - Centro Nacional de Alerta de Tsunamis",
         "provider": "MICROHELP",
         "status":   "operational",
-        "version":  "2.2.0",
-        "phase":    "FASE 2 - Escucha Social Inteligente",
-        "endpoints": {
-            "health":           "/health",
-            "fetch_now":        "/fetch",
-            "fetch_summary":    "/fetch-summary",
-            "sources":          "/api/sources",
-            "earthquakes":      "/api/earthquakes",
-            "earthquakes_local":"/api/earthquakes/local",
-            "earthquakes_dhn":  "/api/earthquakes/by-dhn-level/{level}",
-            "alerts":           "/api/alerts",
-            "buoys":            "/api/buoys",
-            "news":             "/api/news",
-            "news_raw":         "/api/news/raw",
-            "news_summary":     "/api/news/summary",
-            "sealevel_stations":"/api/sealevel/stations",
-            "sealevel_data":    "/api/sealevel/station/{code}",
-        }
+        "version":  "2.3.0",
+        "phase":    "FASE 3 - IGP Twitter Stream",
     }
 
 
@@ -1053,7 +1020,6 @@ async def trigger_fetch():
 
 @app.get("/fetch-summary")
 async def trigger_summary():
-    """[FASE 2] Dispara manualmente la generación del resumen diario de noticias"""
     await generate_daily_news_summary()
     return {"status": "summary generated", "timestamp": datetime.now(timezone.utc).isoformat()}
 
@@ -1136,7 +1102,6 @@ async def get_thresholds(user: dict = Depends(get_current_user)):
 
 @app.get("/api/news")
 async def get_news(limit: int = 20, user: dict = Depends(get_current_user)):
-    """Endpoint legacy -- tabla news original"""
     result = (supabase.table("news")
               .select("*")
               .order("published_at", desc=True)
@@ -1147,7 +1112,6 @@ async def get_news(limit: int = 20, user: dict = Depends(get_current_user)):
 
 @app.get("/api/news/raw")
 async def get_news_raw(limit: int = 50, source_id: str = None, user: dict = Depends(get_current_user)):
-    """[FASE 2] Artículos crudos con fuente, fecha/hora y keywords"""
     query = supabase.table("news_raw").select("*").order("fetched_at", desc=True).limit(limit)
     if source_id:
         query = query.eq("source_id", source_id)
@@ -1157,7 +1121,6 @@ async def get_news_raw(limit: int = 50, source_id: str = None, user: dict = Depe
 
 @app.get("/api/news/summary")
 async def get_news_summary(limit: int = 5, user: dict = Depends(get_current_user)):
-    """[FASE 2] Resúmenes diarios generados por Claude/VIGÍA"""
     result = (supabase.table("news_summaries")
               .select("*")
               .order("generated_at", desc=True)
@@ -1168,7 +1131,6 @@ async def get_news_summary(limit: int = 5, user: dict = Depends(get_current_user
 
 @app.get("/api/news/summary/latest")
 async def get_latest_summary(user: dict = Depends(get_current_user)):
-    """[FASE 2] Último resumen diario -- usado por ARIA/VIGÍA"""
     result = (supabase.table("news_summaries")
               .select("*")
               .order("generated_at", desc=True)
@@ -1187,6 +1149,22 @@ async def get_fetch_log(limit: int = 50, user: dict = Depends(get_current_user))
               .limit(limit)
               .execute())
     return result.data
+
+
+# ─── [FASE 3] IGP Tweets ───
+@app.get("/api/igp-tweets")
+async def get_igp_tweets(limit: int = 10, user: dict = Depends(get_current_user)):
+    """[FASE 3] Últimos tweets del IGP @Sismos_Peru_IGP"""
+    try:
+        result = (supabase.table("igp_tweets")
+                  .select("*")
+                  .order("published_at", desc=True)
+                  .limit(limit)
+                  .execute())
+        return result.data
+    except Exception as e:
+        logger.error(f"igp_tweets error: {e}")
+        return []
 
 
 # ═══════════════════════════════════════════
@@ -1260,8 +1238,14 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
         latest_summary = summary_result.data[0] if summary_result.data else None
     except Exception:
         latest_summary = None
-        try:
-        igp_tweets = supabase.table("igp_tweets").select("*").order("published_at", desc=True).limit(5).execute().data
+
+    # [FASE 3] Últimos tweets del IGP
+    try:
+        igp_tweets = (supabase.table("igp_tweets")
+                      .select("*")
+                      .order("published_at", desc=True)
+                      .limit(5)
+                      .execute()).data
     except Exception:
         igp_tweets = []
 
@@ -1270,19 +1254,18 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
         sl_count    = sl_stations.count or 0
         sl_online   = sum(1 for s in (sl_stations.data or []) if s.get("status") == "online")
     except Exception:
-        sl_count = 0; sl_online = 0
+        sl_count = 0
+        sl_online = 0
 
-    # KPIs legacy
     critical_count = sum(1 for e in earthquakes if e.get("severity") == "critical")
     warning_count  = sum(1 for e in earthquakes if e.get("severity") == "warning")
     alert_buoys    = sum(1 for b in buoys if b.get("status") in ("alert", "warning"))
     sources_online = sum(1 for s in sources if s.get("status") == "active")
 
-    # [FASE 1] KPIs DHN
-    dhn_alarma_count    = sum(1 for e in earthquakes if e.get("dhn_level") == "ALARMA")
-    dhn_alerta_count    = sum(1 for e in earthquakes if e.get("dhn_level") == "ALERTA")
+    dhn_alarma_count      = sum(1 for e in earthquakes if e.get("dhn_level") == "ALARMA")
+    dhn_alerta_count      = sum(1 for e in earthquakes if e.get("dhn_level") == "ALERTA")
     dhn_informacion_count = sum(1 for e in earthquakes if e.get("dhn_level") == "INFORMACION")
-    local_count         = sum(1 for e in earthquakes if e.get("is_local") is True)
+    local_count           = sum(1 for e in earthquakes if e.get("is_local") is True)
 
     if dhn_alarma_count > 0:
         risk_level = "ALTO"
@@ -1295,20 +1278,20 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
 
     return {
         "kpis": {
-            "total_earthquakes":      len(earthquakes),
-            "critical_count":         critical_count,
-            "warning_count":          warning_count,
-            "active_alerts":          len(alerts),
-            "alert_buoys":            alert_buoys,
-            "total_buoys":            len(buoys),
-            "sources_online":         sources_online,
-            "total_sources":          len(sources),
-            "sealevel_stations":      sl_count,
-            "sealevel_online":        sl_online,
-            "risk_level":             risk_level,
-            "dhn_alarma_count":       dhn_alarma_count,
-            "dhn_alerta_count":       dhn_alerta_count,
-            "dhn_informacion_count":  dhn_informacion_count,
+            "total_earthquakes":       len(earthquakes),
+            "critical_count":          critical_count,
+            "warning_count":           warning_count,
+            "active_alerts":           len(alerts),
+            "alert_buoys":             alert_buoys,
+            "total_buoys":             len(buoys),
+            "sources_online":          sources_online,
+            "total_sources":           len(sources),
+            "sealevel_stations":       sl_count,
+            "sealevel_online":         sl_online,
+            "risk_level":              risk_level,
+            "dhn_alarma_count":        dhn_alarma_count,
+            "dhn_alerta_count":        dhn_alerta_count,
+            "dhn_informacion_count":   dhn_informacion_count,
             "local_earthquakes_count": local_count,
         },
         "earthquakes":  earthquakes,
@@ -1317,7 +1300,7 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
         "sources":      sources,
         "thresholds":   thresholds,
         "news":         news,
-        "news_summary": latest_summary,   # [FASE 2] para ARIA/VIGÍA
-        "last_update":  datetime.now(timezone.utc).isoformat(),
+        "news_summary": latest_summary,
         "igp_tweets":   igp_tweets,        # [FASE 3]
+        "last_update":  datetime.now(timezone.utc).isoformat(),
     }
