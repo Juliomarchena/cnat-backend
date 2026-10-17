@@ -1418,6 +1418,19 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
     alert_buoys    = sum(1 for b in buoys if b.get("status") in ("alert", "warning"))
     sources_online = sum(1 for s in sources if s.get("status") == "active")
 
+    # Boya DART en línea = última lectura con menos de 8 h (en modo normal la DART transmite cada 6 h)
+    online_cutoff = datetime.now(timezone.utc) - timedelta(hours=8)
+    dart_buoys    = [b for b in buoys if b.get("source_id") == "ndbc"]
+    for b in dart_buoys:
+        try:
+            last = (supabase.table("buoy_readings").select("reading_time")
+                    .eq("station_id", b["id"]).order("reading_time", desc=True).limit(1).execute()).data
+        except Exception:
+            last = []
+        b["last_reading_at"] = last[0]["reading_time"] if last else None
+        b["online"]          = bool(last) and datetime.fromisoformat(last[0]["reading_time"]) >= online_cutoff
+    online_buoys = sum(1 for b in dart_buoys if b["online"])
+
     dhn_alarma_count      = sum(1 for e in earthquakes if e.get("dhn_level") == "ALARMA")
     dhn_alerta_count      = sum(1 for e in earthquakes if e.get("dhn_level") == "ALERTA")
     dhn_informacion_count = sum(1 for e in earthquakes if e.get("dhn_level") == "INFORMACION")
@@ -1440,6 +1453,8 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
             "active_alerts":           len(alerts),
             "alert_buoys":             alert_buoys,
             "total_buoys":             len(buoys),
+            "online_buoys":            online_buoys,
+            "total_dart_buoys":        len(dart_buoys),
             "sources_online":          sources_online,
             "total_sources":           len(sources),
             "sealevel_stations":       sl_count,
