@@ -697,52 +697,52 @@ async def fetch_sea_level_stations_v2():
     peru_codes_lower = {s["code"].lower() for s in PERU_PRIORITY}
 
     try:
+        # Lista abierta de IOC (sin clave): la API v2 exige IOC_API_KEY y respondía 401
         async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.get(f"{IOC_V2_BASE}/stations", headers=get_ioc_headers())
+            response = await client.get(IOC_SERVICE_URL, params={"query": "stationlist", "showall": "all", "output": "json"})
             response.raise_for_status()
             stations_raw = response.json()
 
-        pacific_stations = []
+        # La lista trae una fila por sensor: se queda la de lectura más reciente de cada estación
+        latest = {}
         for station in stations_raw:
+            code = station.get("Code")
+            if code and str(station.get("lasttime") or "") >= str((latest.get(code) or {}).get("lasttime") or ""):
+                latest[code] = station
+
+        pacific_stations = []
+        for code, station in latest.items():
             try:
                 lat = float(station.get("Lat", 0))
                 lon = float(station.get("Lon", 0))
                 if not is_in_pacific(lat, lon):
                     continue
 
-                code = station.get("Code", "")
-
-                sensors        = station.get("sensor", [])
-                primary_sensor = sensors[0] if sensors else {}
-                api_status     = station.get("status", "Unknown")
-                is_online      = api_status == "Operational"
-
-                last_time_str = primary_sensor.get("lasttime", "")
-                if last_time_str and is_online:
+                last_time_str = str(station.get("lasttime") or "")[:19]
+                is_online     = station.get("status") == 1
+                if is_online:
                     try:
                         last_time = datetime.strptime(last_time_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                        cutoff    = datetime.now(timezone.utc) - timedelta(hours=6)
-                        if last_time < cutoff:
-                            is_online = False
-                    except (ValueError, TypeError):
-                        pass
+                        is_online = last_time >= datetime.now(timezone.utc) - timedelta(hours=6)
+                    except ValueError:
+                        is_online = False
 
                 pacific_stations.append({
                     "code":          code,
-                    "name":          station.get("Location", "Unknown"),
-                    "country":       station.get("countryname", station.get("country", "")),
+                    "name":          station.get("Location") or code,
+                    "country":       station.get("countryname") or station.get("country") or "",
                     "lat":           lat,
                     "lon":           lon,
                     "status":        "online" if is_online else "offline",
-                    "api_status":    api_status,
-                    "last_value":    primary_sensor.get("lastvalue"),
+                    "api_status":    "Operational" if station.get("status") == 1 else "Closed",
+                    "last_value":    station.get("lastvalue"),
                     "last_time":     last_time_str,
-                    "sensor_type":   primary_sensor.get("sensor", ""),
-                    "sensor_units":  primary_sensor.get("units", ""),
-                    "performance":   primary_sensor.get("performance", ""),
-                    "transmit_type": station.get("transmittype", ""),
-                    "operator":      station.get("localoperator", ""),
-                    "source":        "IOC-SLSMF-v2",
+                    "sensor_type":   station.get("sensor") or "",
+                    "sensor_units":  station.get("units") or "",
+                    "performance":   "",
+                    "transmit_type": station.get("connect") or "",
+                    "operator":      str(station.get("localoperator") or ""),
+                    "source":        "IOC-SLSMF",
                     "fetched_at":    now_iso,
                 })
 
