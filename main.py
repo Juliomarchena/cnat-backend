@@ -451,7 +451,7 @@ KEYWORDS_SEISMICOS = [
 RSS_SOURCES_DAILY = [
     ("bbc",  "https://feeds.bbci.co.uk/mundo/rss.xml",             "BBC Mundo"),
     # nyt retirada: el RSS de NYT en Español responde 404 (oct-2026)
-    ("wapo", "https://feeds.washingtonpost.com/rss/world",          "Washington Post"),
+    # wapo retirada: feeds.washingtonpost.com responde 502 de forma sostenida (oct-2026)
 ]
 
 
