@@ -948,10 +948,12 @@ async def fetch_station_sea_data(station_code: str, hours: int = 24):
 IOC_SERVICE_URL = "http://www.ioc-sealevelmonitoring.org/service.php"
 TIDE_SOURCE_ID  = "ioc_peru_tide"
 
-# Código IOC → sensor elegido (medición del 17/10/2026: mejor resolución y continuidad)
+# Código IOC → sensores que se guardan (medición del 17/10/2026). Cada sensor es su propia serie:
+# la clave (estación, sensor, hora) impide duplicados y nunca se mezclan sensores con distinto cero.
 PERU_TIDE_GAUGES = {
-    "call":  "rad", "chan":  "rad", "chimb": "rad", "lobos": "rad", "paita": "rad", "salav": "rad",
-    "pisco": "rad", "sjuan": "rad", "mata":  "rad", "tala2": "prs", "ilom2": "prs", "IsHor": "prs",
+    "call":  ("rad",), "chan":  ("rad",), "chimb": ("rad",), "lobos": ("rad",), "paita": ("rad",), "salav": ("rad",),
+    "pisco": ("rad",), "sjuan": ("rad",), "mata":  ("rad",), "tala2": ("prs", "rad"), "ilom2": ("prs", "rad"),
+    "IsHor": ("prs",),
 }
 
 
@@ -984,7 +986,7 @@ async def capture_peru_sea_level(hours: int = 3):
     failed = []
 
     async with httpx.AsyncClient(timeout=60) as client:
-        for code, sensor in PERU_TIDE_GAUGES.items():
+        for code, sensors in PERU_TIDE_GAUGES.items():
             try:
                 r = await client.get(IOC_SERVICE_URL, params={
                     "query":     "data",
@@ -998,7 +1000,7 @@ async def capture_peru_sea_level(hours: int = 3):
                 if raw and isinstance(raw[0], dict) and "error" in raw[0]:
                     raise ValueError(raw[0]["error"])
 
-                rows = build_sea_level_hours(code, sensor, raw)
+                rows = [row for sensor in sensors for row in build_sea_level_hours(code, sensor, raw)]
                 if rows:
                     result = supabase.rpc("upsert_sea_level_hours", {"p_rows": rows}).execute()
                     total += result.data or 0
