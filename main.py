@@ -1041,6 +1041,33 @@ async def fetch_daily():
 
 
 # ═══════════════════════════════════════════
+#  RETENCIÓN DE fetch_log (diario del sistema)
+#  Borra SOLO filas de fetch_log con más de N días. No toca ninguna tabla de datos
+#  (sea_level_hourly, buoy_readings, earthquakes, tsunami_alerts, ...).
+# ═══════════════════════════════════════════
+
+FETCH_LOG_RETENTION_DAYS = 30
+FETCH_LOG_MIN_RETENTION  = 7     # tope de seguridad: nunca se borra lo de los últimos 7 días
+
+
+async def cleanup_fetch_log():
+    days = max(FETCH_LOG_RETENTION_DAYS, FETCH_LOG_MIN_RETENTION)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    try:
+        # primero se cuentan (solo el total, sin traer filas) para dejar constancia en el log
+        old =(supabase.table("fetch_log").select("id", count="exact")
+               .lt("fetched_at", cutoff).limit(1).execute())
+        total = old.count or 0
+        if total == 0:
+            logger.info(f"🧹 fetch_log: nada que borrar (retención {days} días)")
+            return
+        supabase.table("fetch_log").delete().lt("fetched_at", cutoff).execute()
+        logger.info(f"🧹 fetch_log: {total} registros de más de {days} días borrados")
+    except Exception as e:
+        logger.warning(f"fetch_log cleanup error (no fatal): {e}")
+
+
+# ═══════════════════════════════════════════
 #  FASTAPI APP
 # ═══════════════════════════════════════════
 
@@ -1069,6 +1096,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(fetch_igp_web, "interval", minutes=5, id="igp_web", args=[supabase])
     scheduler.add_job(capture_peru_sea_level, "interval", minutes=5, id="sea_level_peru")
     scheduler.add_job(capture_peru_sea_level, "cron", hour=6, minute=30, id="sea_level_peru_48h", kwargs={"hours": 48})
+    scheduler.add_job(cleanup_fetch_log, "cron", hour=3, minute=15, id="fetch_log_retention")
     scheduler.start()
     logger.info("Scheduler: fetch/5min | sea_level/30min | mareografos_peru/5min (+48h a 06:30UTC) | resumen_diario/06:00UTC")
 
