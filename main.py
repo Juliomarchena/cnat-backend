@@ -315,7 +315,8 @@ async def fetch_ptwc():
 async def fetch_ndbc_dart():
     source_id     = "ndbc"
     start         = time.time()
-    dart_stations = ["32412", "32413", "32411", "43412", "43413", "32301", "32302"]
+    # 32412/32301/32302 retiradas por NOAA; 32411/43412 sin datos DART en tiempo real (activestations.xml, oct-2026)
+    dart_stations = ["32413", "43413", "32401", "32402", "32403", "32404"]
     total_records = 0
 
     try:
@@ -325,6 +326,7 @@ async def fetch_ndbc_dart():
                     url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id}.dart"
                     r   = await client.get(url)
                     if r.status_code != 200:
+                        logger.warning(f"DART station {station_id}: HTTP {r.status_code}")
                         continue
 
                     lines = r.text.strip().split("\n")
