@@ -1421,7 +1421,7 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
     warning_count  = sum(1 for e in earthquakes if e.get("severity") == "warning")
     alert_buoys    = sum(1 for b in buoys if b.get("status") in ("alert", "warning"))
     sources_online = sum(1 for s in sources if s.get("status") == "active")
-    live_sources   = [s for s in sources if s.get("status") != "retired"]  # una fuente retirada a propósito no es un error
+    live_sources   = [s for s in sources if s.get("status") != "inactive"]  # status inactive = fuente retirada a propósito no es un error
 
     # Boya DART en línea = última lectura con menos de 8 h (en modo normal la DART transmite cada 6 h)
     online_cutoff = datetime.now(timezone.utc) - timedelta(hours=8)
