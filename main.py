@@ -1030,7 +1030,7 @@ async def fetch_all():
 
 
 async def fetch_slow():
-    await fetch_sea_level()
+    # fetch_sea_level() ya no se llama: escribía mareógrafos (sl_*) en buoy_stations; tienen su tabla sea_level_stations
     await fetch_sea_level_stations_v2()
     try:
         supabase.rpc("refresh_sea_level_event_windows", {}).execute()
