@@ -391,116 +391,48 @@ async def fetch_ndbc_dart():
         logger.error(f"NDBC error: {e}")
 
 
-# ─── 4. IRIS FDSN Earthquakes ───
-async def fetch_iris():
-    source_id = "iris"
-    start     = time.time()
-    try:
-        now        = datetime.now(timezone.utc)
-        start_time = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
-        url        = f"https://service.iris.edu/fdsnws/event/1/query?format=text&orderby=time&limit=50&minmag=4&starttime={start_time}"
-
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            r = await client.get(url)
-            r.raise_for_status()
-
-        lines   = r.text.strip().split("\n")
-        records = []
-        for line in lines[1:]:
-            parts = line.split("|")
-            if len(parts) < 12:
-                continue
-            try:
-                eq_id      = make_id("iris", parts[0].strip())
-                event_time = parts[1].strip()
-                lat        = float(parts[2].strip())
-                lon        = float(parts[3].strip())
-                depth      = float(parts[4].strip())
-                mag        = float(parts[10].strip())
-                place      = parts[12].strip() if len(parts) > 12 else ""
-                record     = build_earthquake_record(
-                    eq_id=eq_id, source_id=source_id,
-                    magnitude=mag, depth_km=depth,
-                    latitude=lat, longitude=lon,
-                    place=place, event_time=event_time,
-                )
-                records.append(record)
-            except (ValueError, IndexError):
-                continue
-
-        if records:
-            supabase.table("earthquakes").upsert(records, on_conflict="id").execute()
-
-        duration = int((time.time() - start) * 1000)
-        await log_fetch(source_id, "success", len(records), duration_ms=duration)
-        await update_source_status(source_id)
-        logger.info(f"IRIS: {len(records)} earthquakes fetched")
-
-    except Exception as e:
-        duration = int((time.time() - start) * 1000)
-        await log_fetch(source_id, "error", error=str(e), duration_ms=duration)
-        await update_source_status(source_id, "error")
-        logger.error(f"IRIS error: {e}")
-
-
-# ─── 5. Chile Alerta API ───
-async def fetch_chile():
-    source_id = "csn_chile"
+# ─── 4. EMSC (Centro Sismológico Euro-Mediterráneo, FDSN) — Chile y alrededores ───
+# Sustituye a chilealerta.com (API retirada, 404) y a IRIS (fdsnws-event retirado).
+async def fetch_emsc():
+    source_id = "emsc"
     start     = time.time()
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            r = await client.get("https://chilealerta.com/api/query/?user=demo&select=ultimos_sismos_chile&limit=30")
+            r = await client.get("https://www.seismicportal.eu/fdsnws/event/1/query", params={
+                "format": "json", "minlat": -56, "maxlat": -17, "minlon": -80, "maxlon": -66,
+                "minmag": 3.5, "limit": 30, "orderby": "time",
+            })
             r.raise_for_status()
             data = r.json()
 
         records = []
-        sismos  = data.get("ultimos_sismos_Chile", [])
-        for s in sismos:
-            eq_id  = make_id("chile", s.get("id", s.get("utc_time")))
-            mag    = float(s.get("magnitude", 0))
-            depth  = float(s.get("depth", 0))
-            record = build_earthquake_record(
-                eq_id=eq_id, source_id=source_id,
-                magnitude=mag, depth_km=depth,
-                latitude=s.get("latitude", 0),
-                longitude=s.get("longitude", 0),
-                place=s.get("reference", ""),
-                event_time=s.get("utc_time", "").replace("/", "-"),
-            )
-            records.append(record)
+        for f in data.get("features", []):
+            try:
+                s      = f["properties"]
+                record = build_earthquake_record(
+                    eq_id=make_id("emsc", f.get("id")), source_id=source_id,
+                    magnitude=s.get("mag") or 0, depth_km=s.get("depth") or 0,
+                    latitude=s.get("lat", 0), longitude=s.get("lon", 0),
+                    place=s.get("flynn_region", ""),
+                    event_time=s.get("time", "").replace("Z", "+00:00"),
+                )
+                records.append(record)
+            except (ValueError, TypeError, KeyError):
+                continue
 
         if records:
             supabase.table("earthquakes").upsert(records, on_conflict="id").execute()
 
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            r2 = await client.get("https://chilealerta.com/api/query/?user=demo&select=tsunami_chile")
-            if r2.status_code == 200:
-                tsu_data = r2.json()
-                for key, val in tsu_data.items():
-                    if isinstance(val, list):
-                        for item in val:
-                            if isinstance(item, dict) and item.get("title"):
-                                alert_id = make_id("snam", item.get("title", ""))
-                                supabase.table("tsunami_alerts").upsert([{
-                                    "id":         alert_id,
-                                    "source_id":  "snam",
-                                    "alert_type": "INFORMACION",
-                                    "title":      item.get("title", "")[:500],
-                                    "message":    item.get("description", "")[:2000],
-                                    "issued_at":  item.get("date", datetime.now(timezone.utc).isoformat()),
-                                    "severity":   "info",
-                                }], on_conflict="id").execute()
-
         duration = int((time.time() - start) * 1000)
         await log_fetch(source_id, "success", len(records), duration_ms=duration)
         await update_source_status(source_id)
-        logger.info(f"Chile: {len(records)} earthquakes fetched")
+        logger.info(f"EMSC: {len(records)} earthquakes fetched")
 
     except Exception as e:
         duration = int((time.time() - start) * 1000)
         await log_fetch(source_id, "error", error=str(e), duration_ms=duration)
         await update_source_status(source_id, "error")
-        logger.error(f"Chile error: {e}")
+        logger.error(f"EMSC error: {e}")
 
 
 # ═══════════════════════════════════════════
@@ -737,55 +669,6 @@ Formato de respuesta (JSON estricto, sin texto fuera del JSON):
         logger.error(f"📰 [FASE 2] Error generando resumen diario: {e}")
 
 
-# ─── 7. Sea Level UNESCO (API v1 - legacy) ───
-async def fetch_sea_level():
-    source_id = "sea_level"
-    start     = time.time()
-    try:
-        url = "https://www.ioc-sealevelmonitoring.org/service.php?query=stationlist&showall=all&output=json"
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            r = await client.get(url)
-            r.raise_for_status()
-            stations = r.json()
-
-        pacific_stations = []
-        for s in stations:
-            try:
-                lon = float(s.get("lon", 0))
-                lat = float(s.get("lat", 0))
-                if -120 <= lon <= -60 and -60 <= lat <= 20:
-                    pacific_stations.append(s)
-            except (ValueError, TypeError):
-                continue
-
-        for station in pacific_stations[:20]:
-            station_id = make_id("sl", station.get("code", ""))
-            try:
-                supabase.table("buoy_stations").upsert([{
-                    "id":           f"sl_{station.get('code', station_id)}",
-                    "name":         station.get("location", "Unknown"),
-                    "country":      station.get("country", ""),
-                    "latitude":     round(float(station.get("lat", 0)), 6),
-                    "longitude":    round(float(station.get("lon", 0)), 6),
-                    "station_type": "tide_gauge",
-                    "source_id":    source_id,
-                    "status":       "normal",
-                }], on_conflict="id").execute()
-            except Exception:
-                continue
-
-        duration = int((time.time() - start) * 1000)
-        await log_fetch(source_id, "success", len(pacific_stations[:20]), duration_ms=duration)
-        await update_source_status(source_id)
-        logger.info(f"Sea Level: {len(pacific_stations[:20])} Pacific stations registered")
-
-    except Exception as e:
-        duration = int((time.time() - start) * 1000)
-        await log_fetch(source_id, "error", error=str(e), duration_ms=duration)
-        await update_source_status(source_id, "error")
-        logger.error(f"Sea Level error: {e}")
-
-
 # ═══════════════════════════════════════════
 #  8. MAPA MAREOGRÁFICO - IOC API v2
 # ═══════════════════════════════════════════
@@ -952,7 +835,7 @@ TIDE_SOURCE_ID  = "ioc_peru_tide"
 # la clave (estación, sensor, hora) impide duplicados y nunca se mezclan sensores con distinto cero.
 PERU_TIDE_GAUGES = {
     "call":  ("rad",), "chan":  ("rad",), "chimb": ("rad",), "lobos": ("rad",), "paita": ("rad",), "salav": ("rad",),
-    "pisco": ("rad",), "sjuan": ("rad",), "mata":  ("rad",), "tala2": ("prs", "rad"), "ilom2": ("prs", "rad"),
+    "pisco": ("rad",), "sjuan": ("rad",), "mata":  ("rad",), "tala2": ("prs",), "ilom2": ("prs",),
     "IsHor": ("prs",),
 }
 
@@ -1025,14 +908,12 @@ async def fetch_all():
     await fetch_usgs()
     await fetch_ptwc()
     await fetch_ndbc_dart()
-    # fetch_iris() retirada: IRIS/EarthScope apagó fdsnws-event ("This service has been retired")
-    # fetch_chile() retirada: chilealerta.com quitó su API pública (404)
+    await fetch_emsc()  # sustituye a IRIS (retirado) y chilealerta (API retirada)
     await fetch_news_rss()
     logger.info("═══ Fetch cycle complete ═══")
 
 
 async def fetch_slow():
-    # fetch_sea_level() ya no se llama: escribía mareógrafos (sl_*) en buoy_stations; tienen su tabla sea_level_stations
     await fetch_sea_level_stations_v2()
     try:
         supabase.rpc("refresh_sea_level_event_windows", {}).execute()
