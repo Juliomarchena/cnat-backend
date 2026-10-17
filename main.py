@@ -332,7 +332,8 @@ async def fetch_ndbc_dart():
                         continue
 
                     readings = []
-                    for line in lines[2:12]:
+                    # 120 líneas: 30 min en modo evento de 15 s, 2 h a 1 min, 30 h en modo normal
+                    for line in lines[2:122]:
                         parts = line.split()
                         if len(parts) < 8:
                             continue
@@ -347,7 +348,7 @@ async def fetch_ndbc_dart():
                                 "reading_time":   reading_time.isoformat(),
                                 "water_level_mm": height,
                                 "anomaly_mm":     0,
-                                "is_event_mode":  t_type == "2",
+                                "is_event_mode":  t_type in ("2", "3"),
                             })
                         except (ValueError, IndexError):
                             continue
@@ -1048,13 +1049,13 @@ async def health():
 
 
 @app.get("/fetch")
-async def trigger_fetch():
+async def trigger_fetch(user: dict = Depends(get_current_user)):
     await fetch_all()
     return {"status": "fetch completed", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/fetch-summary")
-async def trigger_summary():
+async def trigger_summary(user: dict = Depends(get_current_user)):
     await generate_daily_news_summary()
     return {"status": "summary generated", "timestamp": datetime.now(timezone.utc).isoformat()}
 
@@ -1249,7 +1250,7 @@ async def get_station_metadata(code: str, user: dict = Depends(get_current_user)
 
 
 @app.get("/api/telegram-igp")
-async def trigger_telegram_igp():
+async def trigger_telegram_igp(user: dict = Depends(get_current_user)):
     """[FASE 3.1] Dispara manualmente el scraper de Telegram IGP"""
     count = await fetch_telegram_igp(supabase)
     return {"status": "ok", "new_messages": count, "timestamp": datetime.now(timezone.utc).isoformat()}
