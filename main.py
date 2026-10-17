@@ -1417,8 +1417,20 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
         sl_count = 0
         sl_online = 0
 
-    critical_count = sum(1 for e in earthquakes if e.get("severity") == "critical")
-    warning_count  = sum(1 for e in earthquakes if e.get("severity") == "warning")
+    # Todo lo "activo" (riesgo, alertas, críticos) considera solo las últimas 48 h; total_earthquakes y local_count siguen siendo de los 500 últimos
+    risk_cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+
+    def _reciente(e, campo="event_time"):
+        try:
+            return datetime.fromisoformat(str(e.get(campo)).replace("Z", "+00:00")) >= risk_cutoff
+        except ValueError:
+            return False
+
+    recent_eq     = [e for e in earthquakes if _reciente(e)]
+    recent_alerts = [a for a in alerts if _reciente(a, "issued_at")]
+
+    critical_count = sum(1 for e in recent_eq if e.get("severity") == "critical")
+    warning_count  = sum(1 for e in recent_eq if e.get("severity") == "warning")
     alert_buoys    = sum(1 for b in buoys if b.get("status") in ("alert", "warning"))
     sources_online = sum(1 for s in sources if s.get("status") == "active")
     live_sources   = [s for s in sources if s.get("status") != "inactive"]  # status inactive = fuente retirada a propósito no es un error
@@ -1436,28 +1448,15 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
         b["online"]          = bool(last) and datetime.fromisoformat(last[0]["reading_time"]) >= online_cutoff
     online_buoys = sum(1 for b in dart_buoys if b["online"])
 
-    dhn_alarma_count      = sum(1 for e in earthquakes if e.get("dhn_level") == "ALARMA")
-    dhn_alerta_count      = sum(1 for e in earthquakes if e.get("dhn_level") == "ALERTA")
-    dhn_informacion_count = sum(1 for e in earthquakes if e.get("dhn_level") == "INFORMACION")
+    dhn_alarma_count      = sum(1 for e in recent_eq if e.get("dhn_level") == "ALARMA")
+    dhn_alerta_count      = sum(1 for e in recent_eq if e.get("dhn_level") == "ALERTA")
+    dhn_informacion_count = sum(1 for e in recent_eq if e.get("dhn_level") == "INFORMACION")
     local_count           = sum(1 for e in earthquakes if e.get("is_local") is True)
+    risk_local            = sum(1 for e in recent_eq if e.get("is_local") is True)
 
-    # El nivel de riesgo solo considera sismos de las últimas 48 h (los conteos de arriba siguen siendo de los 500 últimos)
-    risk_cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
-
-    def _reciente(e):
-        try:
-            return datetime.fromisoformat(str(e.get("event_time")).replace("Z", "+00:00")) >= risk_cutoff
-        except ValueError:
-            return False
-
-    recent_eq     = [e for e in earthquakes if _reciente(e)]
-    risk_alarma   = sum(1 for e in recent_eq if e.get("dhn_level") == "ALARMA")
-    risk_alerta   = sum(1 for e in recent_eq if e.get("dhn_level") == "ALERTA")
-    risk_local    = sum(1 for e in recent_eq if e.get("is_local") is True)
-
-    if risk_alarma > 0:
+    if dhn_alarma_count > 0:
         risk_level = "ALTO"
-    elif risk_alerta > 0:
+    elif dhn_alerta_count > 0:
         risk_level = "MEDIO"
     elif risk_local > 0:
         risk_level = "BAJO-VIGILANCIA"
@@ -1469,7 +1468,7 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
             "total_earthquakes":       len(earthquakes),
             "critical_count":          critical_count,
             "warning_count":           warning_count,
-            "active_alerts":           len(alerts),
+            "active_alerts":           len(recent_alerts),
             "alert_buoys":             alert_buoys,
             "total_buoys":             len(buoys),
             "online_buoys":            online_buoys,
