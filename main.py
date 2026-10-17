@@ -283,7 +283,21 @@ async def fetch_ptwc():
                     })
 
         if records:
-            supabase.table("tsunami_alerts").upsert(records, on_conflict="id").execute()
+            # El mismo boletín llega por PHEB y PAAQ con ids distintos: una copia por clave natural (gana PHEB)
+            unique_records = {}
+            for rec in records:
+                unique_records.setdefault((rec["source_id"], rec["issued_at"], rec["title"]), rec)
+            records = list(unique_records.values())
+            try:
+                supabase.table("tsunami_alerts").upsert(records, on_conflict="id").execute()
+            except Exception as e:
+                # Choque con la clave única natural: reintento uno a uno para no perder el resto del lote
+                logger.warning(f"PTWC batch upsert failed, retrying per alert: {e}")
+                for rec in records:
+                    try:
+                        supabase.table("tsunami_alerts").upsert([rec], on_conflict="id").execute()
+                    except Exception as e2:
+                        logger.warning(f"PTWC alert {rec['id']} skipped: {e2}")
 
         duration = int((time.time() - start) * 1000)
         await log_fetch(source_id, "success", len(records), duration_ms=duration)
@@ -339,8 +353,21 @@ async def fetch_ndbc_dart():
                             continue
 
                     if readings:
-                        supabase.table("buoy_readings").insert(readings).execute()
-                        total_records += len(readings)
+                        # El .dart siempre trae las 10 últimas lecturas: upsert idempotente, solo entran las nuevas
+                        result = (supabase.table("buoy_readings")
+                                  .upsert(readings, on_conflict="station_id,reading_time", ignore_duplicates=True)
+                                  .execute())
+                        total_records += len(result.data or [])
+                        # Lectura ya guardada que pasó a modo evento: solo false -> true, nunca al revés
+                        event_times = [datetime.fromisoformat(r["reading_time"]).strftime("%Y-%m-%dT%H:%M:%SZ")
+                                       for r in readings if r["is_event_mode"]]
+                        if event_times:
+                            (supabase.table("buoy_readings")
+                             .update({"is_event_mode": True})
+                             .eq("station_id", station_id)
+                             .in_("reading_time", event_times)
+                             .eq("is_event_mode", False)
+                             .execute())
                         is_event = any(r["is_event_mode"] for r in readings)
                         status   = "alert" if is_event else "normal"
                         supabase.table("buoy_stations").update({"status": status}).eq("id", station_id).execute()
