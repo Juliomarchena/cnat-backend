@@ -58,7 +58,7 @@ logger = logging.getLogger("cnat")
 
 # ─── Config ───
 SUPABASE_URL      = os.getenv("SUPABASE_URL")
-SUPABASE_KEY      = os.getenv("SUPABASE_KEY")
+SUPABASE_KEY      = os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")  # nombre antiguo de render.yaml
 IOC_API_KEY       = os.getenv("IOC_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 supabase: Client  = None

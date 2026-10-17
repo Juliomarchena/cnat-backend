@@ -6,5 +6,5 @@ services:
     envVars:
       - key: SUPABASE_URL
         sync: false
-      - key: SUPABASE_SERVICE_KEY
+      - key: SUPABASE_KEY
         sync: false
