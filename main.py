@@ -794,16 +794,20 @@ async def fetch_sea_level_stations_v2():
     logger.info("🌊 Fetching IOC sea level stations v2 (Pacific filter)...")
 
     now_iso       = datetime.now(timezone.utc).isoformat()
+    # Códigos verificados en la lista de estaciones de IOC (17/10/2026). Respaldo si la API v2 no devuelve alguno.
     PERU_PRIORITY = [
-        {"code": "call2", "name": "Callao",             "country": "Peru", "lat": -12.07, "lon": -77.17, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "IsHor", "name": "Isla Hormiga, Lima", "country": "Peru", "lat": -11.98, "lon": -77.73, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "chim1", "name": "Chimbote",           "country": "Peru", "lat":  -9.08, "lon": -78.61, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "pait",  "name": "Paita",              "country": "Peru", "lat":  -5.08, "lon": -81.11, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "talr",  "name": "Talara",             "country": "Peru", "lat":  -4.58, "lon": -81.28, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "mata",  "name": "Matarani",           "country": "Peru", "lat": -17.00, "lon": -72.11, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "sanjn", "name": "San Juan",           "country": "Peru", "lat": -15.36, "lon": -75.16, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "pdas",  "name": "Pisco / San Andres", "country": "Peru", "lat": -13.72, "lon": -76.22, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
-        {"code": "ilo1",  "name": "Ilo",                "country": "Peru", "lat": -17.64, "lon": -71.34, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "call",  "name": "Callao",              "country": "Peru", "lat": -12.07, "lon": -77.17, "status": "online", "api_status": "Operational", "sensor_type": "rad", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "chan",  "name": "Chancay",             "country": "Peru", "lat": -11.58, "lon": -77.27, "status": "online", "api_status": "Operational", "sensor_type": "rad", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "IsHor", "name": "Isla Hormiga, Lima",  "country": "Peru", "lat": -11.96, "lon": -77.73, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "chimb", "name": "Chimbote",            "country": "Peru", "lat":  -9.08, "lon": -78.61, "status": "online", "api_status": "Operational", "sensor_type": "rad", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "salav", "name": "Salaverry",           "country": "Peru", "lat":  -8.23, "lon": -78.98, "status": "online", "api_status": "Operational", "sensor_type": "rad", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "lobos", "name": "Isla Lobos",          "country": "Peru", "lat":  -6.94, "lon": -80.72, "status": "online", "api_status": "Operational", "sensor_type": "rad", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "paita", "name": "Paita",               "country": "Peru", "lat":  -5.08, "lon": -81.11, "status": "online", "api_status": "Operational", "sensor_type": "rad", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "tala2", "name": "Talara",              "country": "Peru", "lat":  -4.58, "lon": -81.28, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "pisco", "name": "Pisco",               "country": "Peru", "lat": -13.82, "lon": -76.25, "status": "online", "api_status": "Operational", "sensor_type": "rad", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "sjuan", "name": "San Juan de Marcona", "country": "Peru", "lat": -15.36, "lon": -75.16, "status": "online", "api_status": "Operational", "sensor_type": "rad", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "mata",  "name": "Matarani",            "country": "Peru", "lat": -17.00, "lon": -72.11, "status": "online", "api_status": "Operational", "sensor_type": "rad", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
+        {"code": "ilom2", "name": "Ilo",                 "country": "Peru", "lat": -17.64, "lon": -71.35, "status": "online", "api_status": "Operational", "sensor_type": "prs", "operator": "DHN Peru", "source": "IOC-SLSMF-v2", "fetched_at": now_iso},
     ]
     peru_codes_lower = {s["code"].lower() for s in PERU_PRIORITY}
 
@@ -822,8 +826,6 @@ async def fetch_sea_level_stations_v2():
                     continue
 
                 code = station.get("Code", "")
-                if code.lower() in peru_codes_lower:
-                    continue
 
                 sensors        = station.get("sensor", [])
                 primary_sensor = sensors[0] if sensors else {}
@@ -863,8 +865,12 @@ async def fetch_sea_level_stations_v2():
                 logger.warning(f"Skipping station: {e}")
                 continue
 
-        all_stations = PERU_PRIORITY + pacific_stations
-        logger.info(f"🌊 Pacific: {len(pacific_stations)} + {len(PERU_PRIORITY)} Peru = {len(all_stations)} total")
+        # Perú primero, con su estado real de la API; las que la API no devuelva quedan "offline"
+        api_codes    = {s["code"].lower() for s in pacific_stations}
+        peru_missing = [dict(s, status="offline") for s in PERU_PRIORITY if s["code"].lower() not in api_codes]
+        pacific_stations.sort(key=lambda s: s["code"].lower() not in peru_codes_lower)
+        all_stations = pacific_stations + peru_missing
+        logger.info(f"🌊 Pacific: {len(pacific_stations)} (Perú sin datos en API: {len(peru_missing)}) = {len(all_stations)} total")
 
         if all_stations and supabase:
             supabase.table("sea_level_stations").delete().neq("code", "").execute()
@@ -904,7 +910,7 @@ async def fetch_station_sea_data(station_code: str, hours: int = 24):
                 "query":     "data",
                 "code":      station_code,
                 "timestart": start_dt.strftime("%Y-%m-%dT%H:%M"),
-                "timeend":   now.strftime("%Y-%m-%dT%H:%M"),
+                "timestop":  now.strftime("%Y-%m-%dT%H:%M"),  # IOC ignora "timeend"
                 "format":    "json"
             })
             response.raise_for_status()
@@ -933,6 +939,80 @@ async def fetch_station_sea_data(station_code: str, hours: int = 24):
 
 
 # ═══════════════════════════════════════════
+#  9. HISTORIAL MAREÓGRAFOS PERÚ - IOC (1 min)
+#  Tabla sea_level_hourly: 1 fila = estación × sensor × hora UTC, values_m[1..60] = minuto 0..59
+# ═══════════════════════════════════════════
+
+IOC_SERVICE_URL = "http://www.ioc-sealevelmonitoring.org/service.php"
+TIDE_SOURCE_ID  = "ioc_peru_tide"
+
+# Código IOC → sensor elegido (medición del 17/10/2026: mejor resolución y continuidad)
+PERU_TIDE_GAUGES = {
+    "call":  "rad", "chan":  "rad", "chimb": "rad", "lobos": "rad", "paita": "rad", "salav": "rad",
+    "pisco": "rad", "sjuan": "rad", "mata":  "rad", "tala2": "prs", "ilom2": "prs", "IsHor": "prs",
+}
+
+
+def build_sea_level_hours(station_code, sensor, raw_points):
+    """Agrupa las lecturas del sensor elegido en filas horarias de 60 minutos (None = sin dato)."""
+    hours = {}
+    for p in raw_points:
+        if p.get("sensor") != sensor or p.get("slevel") in (None, ""):
+            continue
+        try:
+            t     = datetime.strptime(p["stime"], "%Y-%m-%d %H:%M:%S")
+            value = round(float(p["slevel"]), 4)
+        except (KeyError, ValueError, TypeError):
+            continue
+        minutes = hours.setdefault(t.replace(minute=0, second=0), [None] * 60)
+        if minutes[t.minute] is None:
+            minutes[t.minute] = value
+    return [{"station_code": station_code,
+             "sensor":       sensor,
+             "hour_start":   h.strftime("%Y-%m-%dT%H:00:00Z"),
+             "values_m":     v}
+            for h, v in sorted(hours.items())]
+
+
+async def capture_peru_sea_level(hours: int = 3):
+    """Guarda las últimas `hours` horas de los mareógrafos peruanos. Idempotente: nunca sobrescribe un minuto ya guardado."""
+    start  = time.time()
+    now    = datetime.now(timezone.utc)
+    total  = 0
+    failed = []
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        for code, sensor in PERU_TIDE_GAUGES.items():
+            try:
+                r = await client.get(IOC_SERVICE_URL, params={
+                    "query":     "data",
+                    "code":      code,
+                    "timestart": (now - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M"),
+                    "timestop":  now.strftime("%Y-%m-%dT%H:%M"),
+                    "format":    "json",
+                })
+                r.raise_for_status()
+                raw = r.json()
+                if raw and isinstance(raw[0], dict) and "error" in raw[0]:
+                    raise ValueError(raw[0]["error"])
+
+                rows = build_sea_level_hours(code, sensor, raw)
+                if rows:
+                    result = supabase.rpc("upsert_sea_level_hours", {"p_rows": rows}).execute()
+                    total += result.data or 0
+            except Exception as e:
+                logger.warning(f"Sea level {code} error: {e}")
+                failed.append(code)
+            await asyncio.sleep(1)  # sin ráfagas contra IOC
+
+    duration = int((time.time() - start) * 1000)
+    status   = "error" if len(failed) == len(PERU_TIDE_GAUGES) else "success"
+    await log_fetch(TIDE_SOURCE_ID, status, total,
+                    error=f"fallaron: {', '.join(failed)}" if failed else None, duration_ms=duration)
+    logger.info(f"🌊 Mareógrafos Perú: {total} horas nuevas o completadas, {len(failed)} estaciones con error")
+
+
+# ═══════════════════════════════════════════
 #  ORCHESTRATORS
 # ═══════════════════════════════════════════
 
@@ -950,6 +1030,10 @@ async def fetch_all():
 async def fetch_slow():
     await fetch_sea_level()
     await fetch_sea_level_stations_v2()
+    try:
+        supabase.rpc("refresh_sea_level_event_windows", {}).execute()
+    except Exception as e:
+        logger.warning(f"Event windows refresh error: {e}")
 
 
 async def fetch_daily():
@@ -983,8 +1067,10 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(fetch_daily, "cron", hour=6, minute=0, id="fetch_daily")
     scheduler.add_job(fetch_telegram_igp, "interval", minutes=5, id="telegram_igp", args=[supabase])
     scheduler.add_job(fetch_igp_web, "interval", minutes=5, id="igp_web", args=[supabase])
+    scheduler.add_job(capture_peru_sea_level, "interval", minutes=5, id="sea_level_peru")
+    scheduler.add_job(capture_peru_sea_level, "cron", hour=6, minute=30, id="sea_level_peru_48h", kwargs={"hours": 48})
     scheduler.start()
-    logger.info("Scheduler: fetch/5min | sea_level/30min | resumen_diario/06:00UTC")
+    logger.info("Scheduler: fetch/5min | sea_level/30min | mareografos_peru/5min (+48h a 06:30UTC) | resumen_diario/06:00UTC")
 
     # [FASE 3] IGP Twitter Filtered Stream — arranque correcto dentro del event loop
     asyncio.create_task(start_igp_stream(supabase))
