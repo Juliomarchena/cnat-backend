@@ -518,7 +518,7 @@ KEYWORDS_SEISMICOS = [
 
 RSS_SOURCES_DAILY = [
     ("bbc",  "https://feeds.bbci.co.uk/mundo/rss.xml",             "BBC Mundo"),
-    ("nyt",  "https://rss.nytimes.com/services/xml/rss/nyt/espanol.xml", "NYT Español"),
+    # nyt retirada: el RSS de NYT en Español responde 404 (oct-2026)
     ("wapo", "https://feeds.washingtonpost.com/rss/world",          "Washington Post"),
 ]
 
@@ -1023,8 +1023,8 @@ async def fetch_all():
     await fetch_usgs()
     await fetch_ptwc()
     await fetch_ndbc_dart()
-    await fetch_iris()
-    await fetch_chile()
+    # fetch_iris() retirada: IRIS/EarthScope apagó fdsnws-event ("This service has been retired")
+    # fetch_chile() retirada: chilealerta.com quitó su API pública (404)
     await fetch_news_rss()
     logger.info("═══ Fetch cycle complete ═══")
 
@@ -1419,6 +1419,7 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
     warning_count  = sum(1 for e in earthquakes if e.get("severity") == "warning")
     alert_buoys    = sum(1 for b in buoys if b.get("status") in ("alert", "warning"))
     sources_online = sum(1 for s in sources if s.get("status") == "active")
+    live_sources   = [s for s in sources if s.get("status") != "retired"]  # una fuente retirada a propósito no es un error
 
     # Boya DART en línea = última lectura con menos de 8 h (en modo normal la DART transmite cada 6 h)
     online_cutoff = datetime.now(timezone.utc) - timedelta(hours=8)
@@ -1458,7 +1459,7 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
             "online_buoys":            online_buoys,
             "total_dart_buoys":        len(dart_buoys),
             "sources_online":          sources_online,
-            "total_sources":           len(sources),
+            "total_sources":           len(live_sources),
             "sealevel_stations":       sl_count,
             "sealevel_online":         sl_online,
             "risk_level":              risk_level,
