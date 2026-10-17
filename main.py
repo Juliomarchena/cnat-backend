@@ -1441,11 +1441,25 @@ async def get_dashboard(user: dict = Depends(get_current_user)):
     dhn_informacion_count = sum(1 for e in earthquakes if e.get("dhn_level") == "INFORMACION")
     local_count           = sum(1 for e in earthquakes if e.get("is_local") is True)
 
-    if dhn_alarma_count > 0:
+    # El nivel de riesgo solo considera sismos de las últimas 48 h (los conteos de arriba siguen siendo de los 500 últimos)
+    risk_cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+
+    def _reciente(e):
+        try:
+            return datetime.fromisoformat(str(e.get("event_time")).replace("Z", "+00:00")) >= risk_cutoff
+        except ValueError:
+            return False
+
+    recent_eq     = [e for e in earthquakes if _reciente(e)]
+    risk_alarma   = sum(1 for e in recent_eq if e.get("dhn_level") == "ALARMA")
+    risk_alerta   = sum(1 for e in recent_eq if e.get("dhn_level") == "ALERTA")
+    risk_local    = sum(1 for e in recent_eq if e.get("is_local") is True)
+
+    if risk_alarma > 0:
         risk_level = "ALTO"
-    elif dhn_alerta_count > 0:
+    elif risk_alerta > 0:
         risk_level = "MEDIO"
-    elif local_count > 0:
+    elif risk_local > 0:
         risk_level = "BAJO-VIGILANCIA"
     else:
         risk_level = "BAJO"
